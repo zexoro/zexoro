@@ -60,6 +60,8 @@ jobs:
             & $exe check --json
             if ($LASTEXITCODE -ne 7) { throw "$rid check outside an install exited $LASTEXITCODE, expected 7" }
           }
+          # The last native exit code (7) would otherwise become the step's result.
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
