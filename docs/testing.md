@@ -42,3 +42,7 @@ Requirements: an **elevated** PowerShell (per-machine installs, and the test tru
    ```
 
    `-Scope user` or `-Scope machine` limits the run to one scope. Every check prints `PASS` or `FAIL`; the exit code is 1 when anything failed. The script removes leftovers of an interrupted earlier run before it starts.
+
+## Release builds
+
+`.github/workflows/release.yml` publishes zexoro for linux-x64, linux-arm64, osx-x64, osx-arm64 and win-x64 from `v*` tags, each with Native AOT on a runner of that operating system and architecture. Every binary is smoke-tested where it is built: `--version` must print the release version, `doctor` must report the bundled NSIS as ok, and `pack` must build and sign an installer. Pull requests that change the workflow or `eng/`, and manual runs with `dry-run`, do all of this with version `<VersionPrefix>-dryrun.<run number>` and publish nothing.

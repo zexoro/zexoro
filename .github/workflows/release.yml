@@ -1,0 +1,275 @@
+name: Release
+
+# Builds the zexoro CLI with Native AOT for every supported RID, each on a runner of that operating
+# system and architecture with the pinned toolset embedded (eng/toolsets.json), smoke-tests every
+# binary where it was built, and publishes the archives plus SHA256SUMS as a GitHub release.
+#
+# - Tag v<version> (for example v0.1.0): builds and publishes the release <version>.
+# - Pull requests that change this workflow or eng/, and manual runs with dry-run (the default):
+#   build, test and package everything exactly as a release would, but publish nothing.
+#   Their version is <VersionPrefix>-dryrun.<run number>.
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - eng/**
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and package without publishing (publishing also needs a v* tag as the ref)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Determine version
+        id: version
+        shell: bash
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$'
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [ "v$version" != "$GITHUB_REF_NAME" ] || ! [[ "$version" =~ $semver ]]; then
+              echo "::error::tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>[-<prerelease>]"
+              exit 1
+            fi
+            publish=$([ "$DRY_RUN" = true ] && echo false || echo true)
+          else
+            prefix=$(sed -n 's:.*<VersionPrefix>\(.*\)</VersionPrefix>.*:\1:p' Directory.Build.props)
+            version="$prefix-dryrun.$GITHUB_RUN_NUMBER"
+            publish=false
+          fi
+          # 0.x versions and SemVer pre-releases are published as GitHub pre-releases.
+          if [[ "$version" == 0.* || "$version" == *-* ]]; then prerelease=true; else prerelease=false; fi
+          echo "version=$version publish=$publish prerelease=$prerelease"
+          {
+            echo "version=$version"
+            echo "publish=$publish"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.rid }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries are built on the oldest supported Ubuntu so that they run on any
+          # distribution with glibc 2.35 or later.
+          - rid: linux-x64
+            os: ubuntu-22.04
+          - rid: linux-arm64
+            os: ubuntu-22.04-arm
+          - rid: osx-x64
+            os: macos-15-intel
+          - rid: osx-arm64
+            os: macos-15
+          - rid: win-x64
+            os: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      RID: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/zexoro-toolsets
+          key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
+
+      # Version sets the informational version that 'zexoro --version' prints; without the source
+      # revision it is exactly the release version.
+      - name: Publish (Native AOT)
+        shell: bash
+        run: >
+          dotnet publish src/Zexoro.Cli -c Release -r "$RID" -o artifacts/publish
+          -p:Version="$VERSION" -p:IncludeSourceRevisionInInformationalVersion=false
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=zexoro; [ "$RUNNER_OS" = Windows ] && exe=zexoro.exe
+          cli="$PWD/artifacts/publish/$exe"
+          file "$cli" || true
+
+          actual=$("$cli" --version | tr -d '\r')
+          if [ "$actual" != "$VERSION" ]; then
+            echo "::error::zexoro --version printed '$actual', expected '$VERSION'"
+            exit 1
+          fi
+          echo "version: $actual"
+
+          nsis=$(jq -r .nsis.version eng/toolsets.json)
+          work="$(mktemp -d)"
+          export ZEXORO_CACHE_DIR="$work/cache"
+          cd "$work"
+          "$cli" init
+          set +e; "$cli" doctor > doctor.log; set -e
+          cat doctor.log
+          if ! grep -Eq "^ok +bundled NSIS $nsis: makensis" doctor.log; then
+            echo "::error::doctor does not report the bundled NSIS $nsis as ok"
+            exit 1
+          fi
+
+          # Pack and sign an installer, which runs the embedded makensis and calls this binary
+          # back through sign-file. Any small PE file serves as the application.
+          tools=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
+          mkdir -p app assets
+          cp "$tools/Plugins/x86-unicode/System.dll" app/App.exe
+          cp "$tools/Contrib/Graphics/Icons/modern-install.ico" assets/app.ico
+          MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes \
+            -subj "/CN=zexoro release smoke" -addext "extendedKeyUsage=codeSigning"
+          openssl pkcs12 -export -inkey key.pem -in cert.pem -out cert.pfx -passout pass:smoke
+          cat > zexoro.toml <<'TOML'
+          [app]
+          id = "com.example.smoke"
+          name = "Smoke Test"
+          version = "1.0.0"
+          publisher = "zexoro"
+          icon = "assets/app.ico"
+
+          [input]
+          dir = "app"
+          main = "App.exe"
+
+          [windows]
+
+          [windows.signing]
+          certificate = "cert.pfx"
+          password = { env = "SMOKE_PASSWORD" }
+          TOML
+          SMOKE_PASSWORD=smoke "$cli" pack --version 1.2.3
+          installer=dist/SmokeTest-1.2.3-win-x86.exe
+          test -f "$installer"
+          test "$(head -c 2 "$installer")" = "MZ"
+
+      - name: Archive
+        id: archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/stage artifacts/dist
+          cp LICENSE artifacts/stage/
+          name="zexoro-$VERSION-$RID"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp artifacts/publish/zexoro.exe artifacts/stage/
+            pwsh -NoProfile -Command "Compress-Archive -Path artifacts/stage/* -DestinationPath artifacts/dist/$name.zip"
+            archive="artifacts/dist/$name.zip"
+          else
+            cp artifacts/publish/zexoro artifacts/stage/
+            chmod 755 artifacts/stage/zexoro
+            tar -czf "artifacts/dist/$name.tar.gz" -C artifacts/stage zexoro LICENSE
+            archive="artifacts/dist/$name.tar.gz"
+          fi
+          ls -l artifacts/dist
+
+          # The archive itself must contain a working binary.
+          check="$(mktemp -d)"
+          case "$archive" in
+            *.zip)
+              pwsh -NoProfile -Command "Expand-Archive -Path '$archive' -DestinationPath '$(cygpath -w "$check")'"
+              exe="$check/zexoro.exe" ;;
+            *) tar -xzf "$archive" -C "$check"; exe="$check/zexoro" ;;
+          esac
+          test "$("$exe" --version | tr -d '\r')" = "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zexoro-${{ matrix.rid }}
+          path: artifacts/dist/*
+          if-no-files-found: error
+
+  checksums:
+    name: Checksums
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: zexoro-*
+          path: dist
+          merge-multiple: true
+
+      - name: Write SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          expected=(
+            "zexoro-$VERSION-linux-arm64.tar.gz"
+            "zexoro-$VERSION-linux-x64.tar.gz"
+            "zexoro-$VERSION-osx-arm64.tar.gz"
+            "zexoro-$VERSION-osx-x64.tar.gz"
+            "zexoro-$VERSION-win-x64.zip"
+          )
+          actual=$(ls | sort)
+          if [ "$actual" != "$(printf '%s\n' "${expected[@]}")" ]; then
+            echo "::error::unexpected release files:"$'\n'"$actual"
+            exit 1
+          fi
+          sha256sum "${expected[@]}" > SHA256SUMS
+          cat SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [version, checksums]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+          path: dist
+
+      - name: Create the GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=(--verify-tag --title "zexoro $VERSION" --generate-notes)
+          [ "$PRERELEASE" = true ] && flags+=(--prerelease)
+          gh release create "v$VERSION" "${flags[@]}" dist/*

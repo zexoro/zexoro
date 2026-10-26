@@ -1,0 +1,88 @@
+# Example: build a Windows application and package it into a signed installer with zexoro.
+#
+# Copy this file to .github/workflows/ in your repository and adapt the marked steps. It expects a
+# zexoro.toml at the repository root (create it with `zexoro init`) whose [input] dir is the build
+# output below and whose signing section reads the certificate from the environment:
+#
+#   [windows.signing]
+#   certificate = { env = "SIGN_CERT_PATH" }
+#   password    = { env = "SIGN_CERT_PASSWORD" }
+#   timestamp   = "http://timestamp.digicert.com"
+#
+# Repository secrets:
+#   SIGN_CERT_PFX_BASE64  the PFX file, base64-encoded (for example: base64 -w0 cert.pfx)
+#   SIGN_CERT_PASSWORD    its password
+# Without them the installer is built unsigned (remove [windows.signing] from zexoro.toml).
+#
+# Pushing a tag such as v1.2.3 builds the installer for version 1.2.3.
+
+name: Windows installer
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ZEXORO_VERSION: 0.1.0        # the zexoro release to use
+
+jobs:
+  installer:
+    # zexoro packs Windows installers on Linux, macOS or Windows runners alike.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # --- Build your application into the directory named by [input] dir. -------------------
+      # This example publishes a .NET application; use your own build commands instead.
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build the application
+        run: dotnet publish src/MyApp -c Release -r win-x64 --self-contained -o build/win-x64
+      # -------------------------------------------------------------------------------------
+
+      - name: Install zexoro
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/zexoro/zexoro/releases/download/v$ZEXORO_VERSION"
+          archive="zexoro-$ZEXORO_VERSION-linux-x64.tar.gz"
+          mkdir -p "$RUNNER_TEMP/zexoro"
+          cd "$RUNNER_TEMP/zexoro"
+          curl -fsSL --retry 5 -O "$base/$archive" -O "$base/SHA256SUMS"
+          sha256sum --check --ignore-missing SHA256SUMS
+          tar -xzf "$archive" zexoro
+          echo "$RUNNER_TEMP/zexoro" >> "$GITHUB_PATH"
+
+      - name: Determine the version
+        id: version
+        shell: bash
+        run: |
+          # v1.2.3 tags give 1.2.3; other runs use app.version from zexoro.toml.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "args=--version ${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pack
+        shell: bash
+        env:
+          SIGN_CERT_PFX_BASE64: ${{ secrets.SIGN_CERT_PFX_BASE64 }}
+          SIGN_CERT_PASSWORD: ${{ secrets.SIGN_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          export SIGN_CERT_PATH="$RUNNER_TEMP/signing.pfx"
+          printf '%s' "$SIGN_CERT_PFX_BASE64" | base64 --decode > "$SIGN_CERT_PATH"
+          trap 'rm -f "$SIGN_CERT_PATH"' EXIT
+          zexoro doctor
+          zexoro pack ${{ steps.version.outputs.args }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
+          if-no-files-found: error
