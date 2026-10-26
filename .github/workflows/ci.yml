@@ -185,6 +185,8 @@ jobs:
   e2e-windows:
     name: e2e on Windows (packed on ${{ matrix.host }})
     needs: build
+    # Each host's installers are tested even when another host's build failed.
+    if: ${{ !cancelled() }}
     runs-on: windows-latest
     strategy:
       fail-fast: false

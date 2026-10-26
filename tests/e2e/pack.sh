@@ -36,12 +36,17 @@ printf 'removed by version 2.0.0\n' > "$work/input/1.0.0/obsolete.txt"
 cp "$here/fixture-app/app.ico" "$work/app.ico"
 
 echo "== Creating a throwaway code-signing certificate"
-# MSYS_NO_PATHCONV: Git Bash on Windows would otherwise rewrite the subject "/CN=..." into a path.
-MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout "$work/key.pem" -out "$work/cert.pem" -days 7 -nodes \
-  -subj "/CN=zexoro e2e throwaway" -addext "extendedKeyUsage=codeSigning" -addext "keyUsage=critical,digitalSignature,keyCertSign" 2>/dev/null
-openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -out "$work/e2e.pfx" -passout pass:e2e-password
-openssl x509 -in "$work/cert.pem" -outform der -out "$out/root.cer"
-rm -f "$work/key.pem"
+# Relative paths and MSYS_NO_PATHCONV: Git Bash on Windows would otherwise rewrite the subject
+# "/CN=..." into a path, and a native openssl.exe cannot open MSYS paths such as /tmp/....
+(
+  cd "$work"
+  MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 7 -nodes \
+    -subj "/CN=zexoro e2e throwaway" -addext "extendedKeyUsage=codeSigning"
+  openssl pkcs12 -export -inkey key.pem -in cert.pem -out e2e.pfx -passout pass:e2e-password
+  openssl x509 -in cert.pem -outform der -out root.cer
+  rm -f key.pem
+)
+cp "$work/root.cer" "$out/root.cer"
 
 # config <scope> <version> <signed: yes|no>: writes $work/zexoro.toml
 config() {
