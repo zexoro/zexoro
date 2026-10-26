@@ -153,15 +153,16 @@ function Clear-App($App) {
     if (Test-Path -LiteralPath $DataDir) { Remove-Item -LiteralPath $DataDir -Recurse -Force }
 }
 
-function Test-Signatures([string[]]$Paths, [string]$Thumbprint) {
+# Valid means the signature matches the file and chains to a trusted root; the issuer check ties it to the test root.
+function Test-Signatures([string[]]$Paths, [string]$RootSubject) {
     foreach ($path in $Paths) {
         $signature = Get-AuthenticodeSignature -LiteralPath $path
-        $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Thumbprint } else { '' }
-        [void](Test-That ($signature.Status -eq 'Valid' -and $signer -eq $Thumbprint) "signature valid: $(Split-Path -Leaf $path)" "$($signature.Status): $($signature.StatusMessage)")
+        $issuer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Issuer } else { '' }
+        [void](Test-That ($signature.Status -eq 'Valid' -and $issuer -eq $RootSubject) "signature valid: $(Split-Path -Leaf $path)" "$($signature.Status): $($signature.StatusMessage); issuer '$issuer'")
     }
 }
 
-function Test-Installed($App, [string]$Version, [string]$Thumbprint) {
+function Test-Installed($App, [string]$Version, [string]$RootSubject) {
     $appDir = Join-Path $App.Root 'app'
     $main = Join-Path $appDir 'FixtureApp.exe'
     Assert-That (Test-Path -LiteralPath $main) "$Version installed: $main exists"
@@ -202,7 +203,7 @@ function Test-Installed($App, [string]$Version, [string]$Thumbprint) {
     $target = if (Test-Path -LiteralPath $App.Shortcut) { Get-ShortcutTarget $App.Shortcut } else { '' }
     Test-Equal $target $main "Start menu shortcut $($App.Shortcut) points to the main executable"
 
-    if ($Thumbprint) { Test-Signatures @($App.Installer[$Version], $uninstaller, $main) $Thumbprint }
+    if ($RootSubject) { Test-Signatures @($App.Installer[$Version], $uninstaller, $main) $RootSubject }
 
     if (Test-Path -LiteralPath $DataDir) { Remove-Item -LiteralPath $DataDir -Recurse -Force }
     $code = Invoke-Program $main @()
@@ -211,7 +212,7 @@ function Test-Installed($App, [string]$Version, [string]$Thumbprint) {
     return $entry
 }
 
-function Test-Scope([string]$ScopeName, [string]$Thumbprint) {
+function Test-Scope([string]$ScopeName, [string]$RootSubject) {
     $title = $ScopeName.Substring(0, 1).ToUpperInvariant() + $ScopeName.Substring(1)
     $name = "Zexoro E2E $title"
     $fileName = $name -replace '[^A-Za-z0-9._-]', ''
@@ -236,12 +237,12 @@ function Test-Scope([string]$ScopeName, [string]$Thumbprint) {
     try {
         Write-Host '-- install 1.0.0'
         Assert-That ((Invoke-Program $app.Installer['1.0.0'] @('/S')) -eq 0) 'installer 1.0.0 /S exits with 0'
-        $v1 = Test-Installed $app '1.0.0' $Thumbprint
+        $v1 = Test-Installed $app '1.0.0' $RootSubject
         [void](Test-That (Test-Path -LiteralPath (Join-Path $app.Root 'app\obsolete.txt')) 'app\obsolete.txt exists in 1.0.0')
 
         Write-Host '-- upgrade to 2.0.0'
         Assert-That ((Invoke-Program $app.Installer['2.0.0'] @('/S')) -eq 0) 'installer 2.0.0 /S exits with 0'
-        $v2 = Test-Installed $app '2.0.0' $Thumbprint
+        $v2 = Test-Installed $app '2.0.0' $RootSubject
         [void](Test-That (-not (Test-Path -LiteralPath (Join-Path $app.Root 'app\obsolete.txt'))) 'app\obsolete.txt is gone after the upgrade')
         [void](Test-That ([string]::CompareOrdinal($v2['ZexoroVersionOrder'], $v1['ZexoroVersionOrder']) -gt 0) 'ZexoroVersionOrder increased')
 
@@ -288,7 +289,7 @@ if (-not $isAdmin) {
 $InstallerDir = (Resolve-Path -LiteralPath $InstallerDir).Path
 Write-Host "Installers: $InstallerDir"
 
-# Trust the throwaway signing certificate for the duration of the test.
+# Trust the throwaway root that issued the signing certificate for the duration of the test.
 $certificate = $null
 $store = $null
 $certificatePath = Join-Path $InstallerDir 'root.cer'
@@ -310,7 +311,7 @@ try {
         Test-Equal (Get-AuthenticodeSignature -LiteralPath $unsigned).Status 'NotSigned' 'installer without [windows.signing] is not signed'
     }
     foreach ($scopeName in $Scope) {
-        Test-Scope $scopeName $(if ($certificate) { $certificate.Thumbprint } else { '' })
+        Test-Scope $scopeName $(if ($certificate) { $certificate.Subject } else { '' })
     }
 } finally {
     if ($store) {

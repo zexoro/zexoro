@@ -7,7 +7,7 @@
 #   user/ZexoroE2EUser-{1.0.0,2.0.0}-win-x64.exe        per-user, signed
 #   machine/ZexoroE2EMachine-{1.0.0,2.0.0}-win-x64.exe  per-machine, signed
 #   unsigned/ZexoroE2EUser-1.0.0-win-x64.exe            per-user, no [windows.signing]
-#   root.cer                                            the throwaway signing certificate (DER), to trust while testing
+#   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
 set -euo pipefail
@@ -36,15 +36,20 @@ printf 'removed by version 2.0.0\n' > "$work/input/1.0.0/obsolete.txt"
 cp "$here/fixture-app/app.ico" "$work/app.ico"
 
 echo "== Creating a throwaway code-signing certificate"
-# Relative paths and MSYS_NO_PATHCONV: Git Bash on Windows would otherwise rewrite the subject
-# "/CN=..." into a path, and a native openssl.exe cannot open MSYS paths such as /tmp/....
+# A root CA and a code-signing leaf issued by it: Windows does not accept a self-signed CA
+# certificate as the signer itself. Relative paths and MSYS_NO_PATHCONV: Git Bash on Windows would
+# otherwise rewrite the subjects "/CN=..." into paths, and a native openssl.exe cannot open MSYS
+# paths such as /tmp/....
 (
   cd "$work"
-  MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 7 -nodes \
-    -subj "/CN=zexoro e2e throwaway" -addext "extendedKeyUsage=codeSigning"
-  openssl pkcs12 -export -inkey key.pem -in cert.pem -out e2e.pfx -passout pass:e2e-password
-  openssl x509 -in cert.pem -outform der -out root.cer
-  rm -f key.pem
+  export MSYS_NO_PATHCONV=1
+  openssl req -x509 -newkey rsa:2048 -keyout root.key -out root.pem -days 7 -nodes -subj "/CN=zexoro e2e throwaway root"
+  openssl req -newkey rsa:2048 -keyout key.pem -out signer.csr -nodes -subj "/CN=zexoro e2e throwaway signer"
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=codeSigning\n' > signer.ext
+  openssl x509 -req -in signer.csr -CA root.pem -CAkey root.key -set_serial 2 -days 7 -extfile signer.ext -out signer.pem
+  openssl pkcs12 -export -inkey key.pem -in signer.pem -certfile root.pem -out e2e.pfx -passout pass:e2e-password
+  openssl x509 -in root.pem -outform der -out root.cer
+  rm -f key.pem root.key
 )
 cp "$work/root.cer" "$out/root.cer"
 
