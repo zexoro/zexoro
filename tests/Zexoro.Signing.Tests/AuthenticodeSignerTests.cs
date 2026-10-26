@@ -74,9 +74,13 @@ public class AuthenticodeSignerTests
         var signature = SignedDataTests.Parse(SignedImage.SignedData(resigned, pe32Plus: true));
         Assert.Equal([second.RawData], signature.Certificates);
         Assert.Equal(AuthenticodeSigner.ComputeDigest(new MemoryStream(original)), signature.ImageDigest);
+        // Up to the table, the file equals one signed only once, apart from the checksum and the
+        // table size (ECDSA signatures vary in length).
         var expected = reference.ReadAllBytes();
-        Assert.Equal(expected.AsSpan(0, TestPe.CheckSumOffset).ToArray(), resigned.AsSpan(0, TestPe.CheckSumOffset).ToArray());
-        Assert.Equal(expected[(TestPe.CheckSumOffset + 4)..offset], resigned[(TestPe.CheckSumOffset + 4)..offset]);
+        var entry = TestPe.CertificateEntryOffset(pe32Plus: true);
+        Assert.Equal(expected[..TestPe.CheckSumOffset], resigned[..TestPe.CheckSumOffset]);
+        Assert.Equal(expected[(TestPe.CheckSumOffset + 4)..(entry + 4)], resigned[(TestPe.CheckSumOffset + 4)..(entry + 4)]);
+        Assert.Equal(expected[(entry + 8)..offset], resigned[(entry + 8)..offset]);
     }
 
     [Fact]
