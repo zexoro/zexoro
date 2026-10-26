@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Zexoro.Cli/Zexoro.Cli.csproj" />
+    <Project Path="src/Zexoro.Core/Zexoro.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zexoro.Cli.Tests/Zexoro.Cli.Tests.csproj" />
+    <Project Path="tests/Zexoro.Core.Tests/Zexoro.Core.Tests.csproj" />
+  </Folder>
+</Solution>
