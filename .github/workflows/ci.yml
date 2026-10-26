@@ -87,7 +87,8 @@ jobs:
           mkdir -p "build/my app" assets
           cp "$nsis/Plugins/x86-unicode/System.dll" "build/my app/App.exe"
           cp "$nsis/Contrib/Graphics/Icons/modern-install.ico" assets/app.ico
-          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes \
+          # MSYS_NO_PATHCONV keeps Git Bash on Windows from turning "/CN=..." into a path.
+          MSYS_NO_PATHCONV=1 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes \
             -subj "/CN=zexoro smoke" -addext "extendedKeyUsage=codeSigning"
           openssl pkcs12 -export -inkey key.pem -in cert.pem -out "it's a cert.pfx" -passout pass:smoke
           cat > zexoro.toml <<'TOML'
