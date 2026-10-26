@@ -49,3 +49,57 @@ jobs:
             echo "expected a non-zero exit code for unknown arguments" >&2
             exit 1
           fi
+
+      # Independent checks of zexoro's Authenticode signatures. The fixture tool signs small PE
+      # files with throwaway certificates (RSA, ECDSA, and an ECDSA leaf under an RSA CA chain).
+      - name: Verify Authenticode signatures with osslsigncode
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+          out=artifacts/signing
+          dotnet run --project tests/Zexoro.Signing.Fixtures -c Release --no-build -- "$out"
+          for exe in "$out"/*.exe; do
+            name=$(basename "$exe")
+            log="$exe.log"
+            if ! osslsigncode verify -CAfile "$out/${name%%.*}.root.pem" -in "$exe" > "$log" 2>&1; then
+              cat "$log"
+              echo "::error::osslsigncode rejected $name" >&2
+              exit 1
+            fi
+            if grep -q "invalid PE checksum" "$log"; then
+              cat "$log"
+              echo "::error::wrong PE checksum in $name" >&2
+              exit 1
+            fi
+            echo "verified $name"
+          done
+
+      - name: Verify Authenticode signatures with Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'artifacts/signing'
+          dotnet run --project tests/Zexoro.Signing.Fixtures -c Release --no-build -- $out artifacts/publish/${{ matrix.rid }}/zexoro.exe
+          if ($LASTEXITCODE -ne 0) { throw "fixture signing failed" }
+          $roots = Get-ChildItem "$out/*.root.cer" | ForEach-Object {
+            Import-Certificate -FilePath $_.FullName -CertStoreLocation Cert:\LocalMachine\Root
+          }
+          try {
+            $failed = 0
+            foreach ($exe in Get-ChildItem "$out/*.exe") {
+              $signature = Get-AuthenticodeSignature -FilePath $exe.FullName
+              if ($signature.Status -ne 'Valid') {
+                Write-Host "::error::$($exe.Name): $($signature.Status) - $($signature.StatusMessage)"
+                $failed++
+              } else {
+                Write-Host "verified $($exe.Name) ($($signature.SignerCertificate.Subject))"
+              }
+            }
+            if ($failed -gt 0) { throw "$failed signature(s) not valid" }
+          } finally {
+            $roots | Remove-Item
+          }

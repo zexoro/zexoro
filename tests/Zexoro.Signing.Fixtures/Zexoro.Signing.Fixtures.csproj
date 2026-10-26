@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Writes signed fixture PE files for independent verification in CI (osslsigncode, Get-AuthenticodeSignature). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zexoro.Signing\Zexoro.Signing.csproj" />
+  </ItemGroup>
+</Project>

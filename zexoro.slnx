@@ -2,11 +2,14 @@
   <Folder Name="/src/">
     <Project Path="src/Zexoro.Cli/Zexoro.Cli.csproj" />
     <Project Path="src/Zexoro.Core/Zexoro.Core.csproj" />
+    <Project Path="src/Zexoro.Signing/Zexoro.Signing.csproj" />
     <Project Path="src/Zexoro.Toml/Zexoro.Toml.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zexoro.Cli.Tests/Zexoro.Cli.Tests.csproj" />
     <Project Path="tests/Zexoro.Core.Tests/Zexoro.Core.Tests.csproj" />
+    <Project Path="tests/Zexoro.Signing.Fixtures/Zexoro.Signing.Fixtures.csproj" />
+    <Project Path="tests/Zexoro.Signing.Tests/Zexoro.Signing.Tests.csproj" />
     <Project Path="tests/Zexoro.Toml.Tests/Zexoro.Toml.Tests.csproj" />
   </Folder>
 </Solution>
