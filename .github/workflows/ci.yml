@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-latest
+            rid: osx-arm64
+          - os: windows-latest
+            rid: win-x64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+      - name: Publish CLI (Native AOT)
+        run: dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli=artifacts/publish/${{ matrix.rid }}/zexoro
+          "$cli" --version
+          "$cli" --help
+          if "$cli" --bogus; then
+            echo "expected a non-zero exit code for unknown arguments" >&2
+            exit 1
+          fi
