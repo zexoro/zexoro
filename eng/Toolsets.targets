@@ -1,0 +1,176 @@
+<Project>
+  <!--
+    Embeds the pinned packaging toolsets (eng/toolsets.json) into the CLI as manifest resources.
+
+    The archive for $(RuntimeIdentifier) is embedded when publishing for a RID, otherwise the one
+    for the host RID (so plain builds and tests get a working toolset). Archives are downloaded
+    once into a shared cache, verified against their pinned SHA-256 on every build, and never
+    downloaded again while the cached copy matches, so builds work offline after the first one.
+
+    Properties:
+      ZexoroToolsetRid    the RID whose archives are embedded (default: as described above)
+      ZexoroToolsetCache  the download cache (default: $ZEXORO_TOOLSET_CACHE, else ~/.nuget/zexoro-toolsets)
+      ZexoroEmbedToolsets set to false to build without toolsets (zexoro then needs ZEXORO_NSIS_DIR)
+  -->
+  <PropertyGroup>
+    <ZexoroToolsetsFile>$(MSBuildThisFileDirectory)toolsets.json</ZexoroToolsetsFile>
+    <ZexoroToolsetRequired Condition="'$(ZexoroToolsetRid)' == '' and '$(RuntimeIdentifier)' != ''">true</ZexoroToolsetRequired>
+    <ZexoroToolsetRid Condition="'$(ZexoroToolsetRid)' == ''">$(RuntimeIdentifier)</ZexoroToolsetRid>
+    <ZexoroToolsetRid Condition="'$(ZexoroToolsetRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</ZexoroToolsetRid>
+    <ZexoroToolsetRequired Condition="'$(ZexoroToolsetRequired)' == ''">false</ZexoroToolsetRequired>
+    <ZexoroToolsetCache Condition="'$(ZexoroToolsetCache)' == ''">$(ZEXORO_TOOLSET_CACHE)</ZexoroToolsetCache>
+  </PropertyGroup>
+
+  <UsingTask TaskName="ZexoroFetchToolset" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <ToolsetsFile ParameterType="System.String" Required="true" />
+      <ToolsetName ParameterType="System.String" Required="true" />
+      <Rid ParameterType="System.String" Required="true" />
+      <CacheDirectory ParameterType="System.String" />
+      <Required ParameterType="System.Boolean" />
+      <ArchivePath ParameterType="System.String" Output="true" />
+      <Version ParameterType="System.String" Output="true" />
+      <Sha256 ParameterType="System.String" Output="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System" />
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.Linq" />
+      <Using Namespace="System.Net.Http" />
+      <Using Namespace="System.Runtime.Serialization.Json" />
+      <Using Namespace="System.Security.Cryptography" />
+      <Using Namespace="System.Xml" />
+      <Using Namespace="System.Xml.Linq" />
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        // JSON is read through the XML mapping of the JSON reader, which netstandard provides.
+        XElement root;
+        using (var reader = JsonReaderWriterFactory.CreateJsonReader(File.ReadAllBytes(ToolsetsFile), XmlDictionaryReaderQuotas.Max))
+        {
+            root = XElement.Load(reader);
+        }
+
+        Func<XElement, string, XElement> child = (parent, key) => parent == null ? null : parent.Elements()
+            .FirstOrDefault(e => ((string)e.Attribute("item") ?? e.Name.LocalName) == key);
+        var toolset = child(root, ToolsetName);
+        var entry = child(child(toolset, "archives"), Rid);
+        if (entry == null)
+        {
+            if (Required)
+            {
+                Log.LogError("eng/toolsets.json pins no {0} archive for {1}; zexoro cannot be published for this RID.", ToolsetName, Rid);
+            }
+            else
+            {
+                Log.LogMessage(MessageImportance.High, "zexoro: no {0} toolset is pinned for {1}; this build needs ZEXORO_NSIS_DIR.", ToolsetName, Rid);
+            }
+
+            return !Log.HasLoggedErrors;
+        }
+
+        Version = (string)child(toolset, "version");
+        Sha256 = ((string)child(entry, "sha256") ?? "").ToLowerInvariant();
+        var url = (string)child(entry, "url");
+        if (string.IsNullOrEmpty(Version) || string.IsNullOrEmpty(url) || Sha256.Length != 64)
+        {
+            Log.LogError("eng/toolsets.json: {0} {1} needs version, url and a 64-digit sha256.", ToolsetName, Rid);
+            return false;
+        }
+
+        var cache = string.IsNullOrEmpty(CacheDirectory)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "zexoro-toolsets")
+            : CacheDirectory;
+        var directory = Path.Combine(cache, ToolsetName, Sha256);
+        var path = Path.Combine(directory, Path.GetFileName(new Uri(url).AbsolutePath));
+
+        Func<string, string> hash = file =>
+        {
+            using (var stream = File.OpenRead(file))
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "").ToLowerInvariant();
+            }
+        };
+
+        if (File.Exists(path))
+        {
+            if (hash(path) == Sha256)
+            {
+                ArchivePath = path;
+                return true;
+            }
+
+            Log.LogMessage(MessageImportance.High, "zexoro: {0} does not match its pinned hash; downloading it again.", path);
+            File.Delete(path);
+        }
+
+        Directory.CreateDirectory(directory);
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        Exception last = null;
+        for (var attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                Log.LogMessage(MessageImportance.High, "zexoro: downloading {0}", url);
+                using (var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+                using (var response = client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                {
+                    response.EnsureSuccessStatusCode();
+                    using (var source = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult())
+                    using (var target = File.Create(temp))
+                    {
+                        source.CopyTo(target);
+                    }
+                }
+
+                var actual = hash(temp);
+                if (actual != Sha256)
+                {
+                    File.Delete(temp);
+                    Log.LogError("{0} has SHA-256 {1}, but eng/toolsets.json pins {2}.", url, actual, Sha256);
+                    return false;
+                }
+
+                try
+                {
+                    File.Move(temp, path);
+                }
+                catch (IOException) when (File.Exists(path) && hash(path) == Sha256)
+                {
+                    // Another build downloaded it at the same time.
+                    File.Delete(temp);
+                }
+
+                ArchivePath = path;
+                return true;
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is IOException || ex is System.Threading.Tasks.TaskCanceledException)
+            {
+                last = ex;
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+
+                System.Threading.Thread.Sleep(2000 * attempt);
+            }
+        }
+
+        Log.LogError("Cannot download {0}: {1}", url, last == null ? "unknown error" : last.Message);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="ZexoroEmbedToolsets" BeforeTargets="PrepareForBuild" Condition="'$(ZexoroEmbedToolsets)' != 'false'">
+    <ZexoroFetchToolset ToolsetsFile="$(ZexoroToolsetsFile)" ToolsetName="nsis" Rid="$(ZexoroToolsetRid)"
+                        CacheDirectory="$(ZexoroToolsetCache)" Required="$(ZexoroToolsetRequired)">
+      <Output TaskParameter="ArchivePath" PropertyName="_ZexoroNsisArchive" />
+      <Output TaskParameter="Version" PropertyName="_ZexoroNsisVersion" />
+      <Output TaskParameter="Sha256" PropertyName="_ZexoroNsisSha256" />
+    </ZexoroFetchToolset>
+    <ItemGroup Condition="'$(_ZexoroNsisArchive)' != ''">
+      <EmbeddedResource Include="$(_ZexoroNsisArchive)" LogicalName="Zexoro.Toolsets.nsis.tar.gz" WithCulture="false" Type="Non-Resx" />
+      <AssemblyMetadata Include="Zexoro.Toolsets.nsis.Version" Value="$(_ZexoroNsisVersion)" />
+      <AssemblyMetadata Include="Zexoro.Toolsets.nsis.Sha256" Value="$(_ZexoroNsisSha256)" />
+    </ItemGroup>
+  </Target>
+</Project>

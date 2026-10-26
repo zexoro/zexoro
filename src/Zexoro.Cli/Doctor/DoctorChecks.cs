@@ -1,7 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography.X509Certificates;
+using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
+using Zexoro.Formats.Nsis;
 using Zexoro.Signing;
+using Zexoro.Toolsets;
 
 namespace Zexoro.Cli.Doctor;
 
@@ -15,9 +18,8 @@ internal interface IDoctorCheck
 internal static class DoctorChecks
 {
     /// <summary>
-    /// Checks that need a valid configuration. Extension point: checks of the bundled toolsets
-    /// (for example the extracted <c>makensis</c> and its hash) are added to this list together
-    /// with the back ends that ship them.
+    /// Checks that need a valid configuration. Extension point: checks of the bundled toolsets are
+    /// added to this list together with the back ends that ship them.
     /// </summary>
     public static readonly IReadOnlyList<IDoctorCheck> All =
     [
@@ -26,6 +28,7 @@ internal static class DoctorChecks
         new IconCheck(),
         new WindowsLicenseCheck(),
         new WindowsSigningCheck(),
+        new NsisToolsetCheck(),
     ];
 
     public static void Run(string configPath, string displayPath, CliEnvironment environment, DoctorReport report)
@@ -287,6 +290,29 @@ internal sealed class WindowsSigningCheck : IDoctorCheck
         else
         {
             report.Ok($"timestamp authority {url} (not contacted)");
+        }
+    }
+}
+
+/// <summary>The NSIS toolset extracts, matches its pinned hash and runs.</summary>
+internal sealed class NsisToolsetCheck : IDoctorCheck
+{
+    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    {
+        if (config.Windows is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var toolset = BundledToolsets.ResolveNsis(environment);
+            var version = toolset.GetVersion();
+            report.Ok($"{toolset.Source}: makensis {version} ({toolset.Directory})");
+        }
+        catch (Exception ex) when (ex is NsisException or ToolsetException)
+        {
+            report.Error($"NSIS toolset: {ex.Message}");
         }
     }
 }
