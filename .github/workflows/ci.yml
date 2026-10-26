@@ -69,6 +69,7 @@ jobs:
 
   build:
     name: ${{ matrix.os }}
+    needs: updater
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -93,14 +94,22 @@ jobs:
           path: ~/.nuget/zexoro-toolsets
           key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
 
+      # The updaters published by the 'updater' job, embedded by eng/Updater.targets.
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+
       - name: Build
-        run: dotnet build -c Release
+        run: dotnet build -c Release -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
 
       - name: Test
         run: dotnet test -c Release --no-build
 
       - name: Publish CLI (Native AOT)
-        run: dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+        run: >
+          dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+          -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
 
       - name: Smoke test
         shell: bash
@@ -141,6 +150,9 @@ jobs:
           set +e; "$cli" doctor > doctor.log; set -e
           cat doctor.log
           grep -q "bundled NSIS" doctor.log
+          for rid in win-x86 win-x64 win-arm64; do
+            grep -Eq "^ok +bundled updater for $rid " doctor.log
+          done
           nsis=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
           mkdir -p "build/my app" assets
           cp "$nsis/Plugins/x86-unicode/System.dll" "build/my app/App.exe"

@@ -33,6 +33,9 @@ public sealed class CommandTests : IDisposable
     {
         // Keeps the doctor's toolset check from extracting into the user's real cache.
         _variables["ZEXORO_CACHE_DIR"] = Path.Combine(_dir.FullName, ".cache");
+
+        // Test builds embed no updaters; the doctor's updater check finds these instead.
+        _variables["ZEXORO_UPDATER_DIR"] = UpdaterFiles.Create(Path.Combine(_dir.FullName, ".updaters"));
     }
 
     public void Dispose()
@@ -208,7 +211,7 @@ public sealed class CommandTests : IDisposable
 
         Assert.Empty(Lines(Stdout, "error"));
         Assert.Equal(["warning  [windows.signing] is not configured; installers will be unsigned"], Lines(Stdout, "warning"));
-        Assert.Equal(5, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset
+        Assert.Equal(8, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset, 3 updaters
         Assert.Contains("0 errors, 1 warning.", Stdout, StringComparison.Ordinal);
     }
 
@@ -226,6 +229,36 @@ public sealed class CommandTests : IDisposable
         _stdout.GetStringBuilder().Clear();
         File.Move(Path.Combine(_dir.FullName, "conf", "app.toml"), ConfigPath);
         Assert.Equal(ExitCodes.Success, Run("doctor", $"--config={ConfigPath}"));
+    }
+
+    [Fact]
+    public void Doctor_ReportsTheUpdaters()
+    {
+        WriteProject();
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        foreach (var rid in new[] { "win-x86", "win-x64", "win-arm64" })
+        {
+            Assert.Contains($"ok       updater for {rid} from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Doctor_WarnsOnceWithoutUpdaters()
+    {
+        WriteProject();
+        _variables.Remove("ZEXORO_UPDATER_DIR");
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        Assert.Contains("warning  this zexoro build has no embedded updaters; installers with [updates] need ZEXORO_UPDATER_DIR", Lines(Stdout, "warning"));
+        Assert.Equal(2, Lines(Stdout, "warning").Length);
+    }
+
+    [Fact]
+    public void Doctor_ReportsAMissingUpdaterInTheOverrideDirectory()
+    {
+        WriteProject();
+        File.Delete(Path.Combine(_variables["ZEXORO_UPDATER_DIR"], "zexoro-updater-win-arm64.exe"));
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        Assert.Contains(Lines(Stdout, "warning"), l => l.Contains("zexoro-updater-win-arm64.exe does not exist", StringComparison.Ordinal));
     }
 
     [Fact]

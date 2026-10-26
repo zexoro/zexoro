@@ -16,4 +16,5 @@
     <InternalsVisibleTo Include="Zexoro.Cli.Tests" />
   </ItemGroup>
   <Import Project="..\..\eng\Toolsets.targets" />
+  <Import Project="..\..\eng\Updater.targets" />
 </Project>

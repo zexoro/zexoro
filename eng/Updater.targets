@@ -1,0 +1,68 @@
+<Project>
+  <!--
+    Embeds zexoro-updater for every Windows architecture into the CLI (docs/design/0005-nsis-updates.md
+    section 3). The updater is published once on Windows (the 'updater' job in ci.yml and
+    release.yml) and every CLI build embeds the same files, so it always ships an updater built from
+    its own commit.
+
+    Properties:
+      ZexoroUpdaterDir       a directory with zexoro-updater-win-x86.exe, -win-x64.exe and -win-arm64.exe
+                             (and optionally SHA256SUMS, which they must then match); relative to the
+                             directory the build was started in
+      ZexoroUpdaterRequired  true to fail the build when ZexoroUpdaterDir is not set (release builds)
+
+    Without ZexoroUpdaterDir the CLI builds without updaters: tests never need one, and at run time
+    ZEXORO_UPDATER_DIR points zexoro at a directory of updaters instead.
+  -->
+  <PropertyGroup>
+    <ZexoroUpdaterRequired Condition="'$(ZexoroUpdaterRequired)' == ''">false</ZexoroUpdaterRequired>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ZexoroUpdaterRid Include="win-x86;win-x64;win-arm64" />
+  </ItemGroup>
+
+  <Target Name="ZexoroEmbedUpdaters" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(ZexoroUpdaterDir)' == '' and '$(ZexoroUpdaterRequired)' == 'true'"
+           Text="ZexoroUpdaterRequired is true, but ZexoroUpdaterDir is not set; publish src/Zexoro.Updater for win-x86, win-x64 and win-arm64 and pass -p:ZexoroUpdaterDir=&lt;dir&gt;." />
+    <Message Condition="'$(ZexoroUpdaterDir)' == ''" Importance="high"
+             Text="zexoro: building without embedded updaters (no ZexoroUpdaterDir); 'zexoro pack' with [updates] then needs ZEXORO_UPDATER_DIR." />
+
+    <PropertyGroup Condition="'$(ZexoroUpdaterDir)' != ''">
+      <!-- A relative directory is taken from where the build was started. -->
+      <_ZexoroUpdaterDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildStartupDirectory)', '$(ZexoroUpdaterDir)'))))</_ZexoroUpdaterDir>
+      <_ZexoroUpdaterSums>$([System.IO.Path]::Combine('$(_ZexoroUpdaterDir)', 'SHA256SUMS'))</_ZexoroUpdaterSums>
+    </PropertyGroup>
+    <ItemGroup Condition="'$(ZexoroUpdaterDir)' != ''">
+      <_ZexoroUpdater Include="@(ZexoroUpdaterRid->'$(_ZexoroUpdaterDir)/zexoro-updater-%(Identity).exe')" Rid="%(Identity)" />
+    </ItemGroup>
+
+    <Error Condition="'$(ZexoroUpdaterDir)' != '' and !Exists('%(_ZexoroUpdater.FullPath)')"
+           Text="ZexoroUpdaterDir: %(_ZexoroUpdater.FullPath) does not exist; the directory needs zexoro-updater-win-x86.exe, -win-x64.exe and -win-arm64.exe." />
+
+    <GetFileHash Condition="'$(ZexoroUpdaterDir)' != ''" Files="@(_ZexoroUpdater)" Algorithm="SHA256" HashEncoding="hex">
+      <Output TaskParameter="Items" ItemName="_ZexoroUpdaterHashed" />
+    </GetFileHash>
+
+    <ItemGroup Condition="'$(ZexoroUpdaterDir)' != ''">
+      <_ZexoroUpdaterHashed>
+        <Sha256>$([System.String]::Copy('%(FileHash)').ToLowerInvariant())</Sha256>
+      </_ZexoroUpdaterHashed>
+    </ItemGroup>
+
+    <ReadLinesFromFile Condition="'$(ZexoroUpdaterDir)' != '' and Exists('$(_ZexoroUpdaterSums)')" File="$(_ZexoroUpdaterSums)">
+      <Output TaskParameter="Lines" ItemName="_ZexoroUpdaterSumLines" />
+    </ReadLinesFromFile>
+    <PropertyGroup Condition="'$(ZexoroUpdaterDir)' != ''">
+      <!-- sha256sum writes "<hash>  <file>", or "<hash> *<file>" in binary mode. -->
+      <_ZexoroUpdaterSumText>;@(_ZexoroUpdaterSumLines->Replace('*', ' ')->ToLowerInvariant());</_ZexoroUpdaterSumText>
+    </PropertyGroup>
+    <Error Condition="'$(ZexoroUpdaterDir)' != '' and Exists('$(_ZexoroUpdaterSums)') and !$(_ZexoroUpdaterSumText.Contains(';%(_ZexoroUpdaterHashed.Sha256)  zexoro-updater-%(_ZexoroUpdaterHashed.Rid).exe;'))"
+           Text="%(_ZexoroUpdaterHashed.FullPath) (SHA-256 %(_ZexoroUpdaterHashed.Sha256)) does not match $(_ZexoroUpdaterSums)." />
+
+    <ItemGroup Condition="'$(ZexoroUpdaterDir)' != ''">
+      <EmbeddedResource Include="@(_ZexoroUpdaterHashed)" LogicalName="Zexoro.Updater.%(_ZexoroUpdaterHashed.Rid).exe" WithCulture="false" Type="Non-Resx" />
+      <AssemblyMetadata Include="Zexoro.Updater.%(_ZexoroUpdaterHashed.Rid).Sha256" Value="%(_ZexoroUpdaterHashed.Sha256)" />
+    </ItemGroup>
+  </Target>
+</Project>

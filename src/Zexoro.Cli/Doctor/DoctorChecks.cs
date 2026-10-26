@@ -29,6 +29,7 @@ internal static class DoctorChecks
         new WindowsLicenseCheck(),
         new WindowsSigningCheck(),
         new NsisToolsetCheck(),
+        new UpdaterCheck(),
     ];
 
     public static void Run(string configPath, string displayPath, CliEnvironment environment, DoctorReport report)
@@ -313,6 +314,47 @@ internal sealed class NsisToolsetCheck : IDoctorCheck
         catch (Exception ex) when (ex is NsisException or ToolsetException)
         {
             report.Error($"NSIS toolset: {ex.Message}");
+        }
+    }
+}
+
+/// <summary>An updater is available for every Windows architecture (embedded or from ZEXORO_UPDATER_DIR).</summary>
+internal sealed class UpdaterCheck : IDoctorCheck
+{
+    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    {
+        if (config.Windows is null)
+        {
+            return;
+        }
+
+        var missing = new List<string>();
+        foreach (var architecture in UpdaterBinary.Architectures)
+        {
+            try
+            {
+                var updater = BundledUpdaters.Resolve(architecture, environment);
+                report.Ok($"{updater.Source} (sha256 {updater.Sha256})");
+            }
+            catch (Exception ex) when (ex is NsisException or IOException or UnauthorizedAccessException)
+            {
+                missing.Add(environment.GetVariable(UpdaterBinary.DirectoryVariable) is { Length: > 0 }
+                    ? ex.Message
+                    : $"this zexoro build has no embedded updater for {UpdaterBinary.RidFor(architecture)}");
+            }
+        }
+
+        // Only installers with [updates] need an updater.
+        if (missing.Count == UpdaterBinary.Architectures.Count && environment.GetVariable(UpdaterBinary.DirectoryVariable) is not { Length: > 0 })
+        {
+            report.Warning($"this zexoro build has no embedded updaters; installers with [updates] need {UpdaterBinary.DirectoryVariable}");
+        }
+        else
+        {
+            foreach (var problem in missing)
+            {
+                report.Warning($"updater: {problem}");
+            }
         }
     }
 }
