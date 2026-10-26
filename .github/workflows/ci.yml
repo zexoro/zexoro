@@ -89,8 +89,10 @@ jobs:
             Import-Certificate -FilePath $_.FullName -CertStoreLocation Cert:\LocalMachine\Root
           }
           try {
+            $signed = @(Get-ChildItem "$out/*.exe")
+            if ($signed.Count -lt 4) { throw "expected at least 4 signed files, found $($signed.Count)" }
             $failed = 0
-            foreach ($exe in Get-ChildItem "$out/*.exe") {
+            foreach ($exe in $signed) {
               $signature = Get-AuthenticodeSignature -FilePath $exe.FullName
               if ($signature.Status -ne 'Valid') {
                 Write-Host "::error::$($exe.Name): $($signature.Status) - $($signature.StatusMessage)"
