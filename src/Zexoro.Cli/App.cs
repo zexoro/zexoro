@@ -18,6 +18,17 @@ internal static class App
                                      overrides app.version.
           doctor [--config <path>]   Check the configuration, the files it names, the
                                      signing certificate and the bundled tools.
+          keys new [--output <dir>] [--name <name>]
+                                     Create an update signing key pair: <name>.key.pem
+                                     (private; encrypted when ZEXORO_UPDATE_KEY_PASSWORD
+                                     is set) and <name>.pub. Default name: zexoro-update.
+          feed add --feed <feed.json> [--key <file>] <fragment.json>...
+                                     Merge release fragments into a feed (created when
+                                     missing), increase its sequence and sign it into
+                                     <feed.json>.sig. The private key comes from --key or
+                                     ZEXORO_UPDATE_KEY (PEM text).
+          feed verify --public-key <key or .pub file> <feed.json>
+                                     Check a feed's signature and list its releases.
 
         --config defaults to ./zexoro.toml.
 
@@ -54,6 +65,10 @@ internal static class App
                 return PackCommand.Run(rest, stdout, stderr, environment);
             case "doctor":
                 return DoctorCommand.Run(rest, stdout, stderr, environment);
+            case "keys":
+                return KeysCommand.Run(rest, stdout, stderr, environment);
+            case "feed":
+                return FeedCommand.Run(rest, stdout, stderr, environment);
             case "sign-file":
                 return SignFileCommand.Run(rest, stdout, stderr, environment);
         }

@@ -14,7 +14,7 @@ Every format must be updatable, and the way a format is installed decides how it
 | **Install record** | written by the installer | `zexoro-install.json` in the install root: who this install is and how to update it |
 | **Updater** | shipped by zexoro inside every install | standalone executable `zexoro-updater`; checks, downloads, verifies and applies updates |
 
-zexoro never hosts feeds or packages. `zexoro pack` produces the packages, the feed entries and the signature; the developer uploads them.
+zexoro never hosts feeds or packages. `zexoro pack` produces the packages and the feed entries, `zexoro feed add` merges them into the feed and signs it (refined in `0005-nsis-updates.md`); the developer uploads them.
 
 ## 2. Identity
 
@@ -70,7 +70,7 @@ zexoro never hosts feeds or packages. `zexoro pack` produces the packages, the f
 - `feed.json.sig` is a detached signature over the exact bytes of `feed.json`. The updater verifies the signature **before** parsing; it never interprets unverified bytes.
 - Each artifact is trusted through its `sha256` in the signed feed. Platform signatures (Authenticode, macOS code signing) are checked in addition where the format requires them (see section 7), but the feed key is the root of trust.
 - Feeds must be served over HTTPS. Plain HTTP is accepted only for `localhost`, for tests.
-- `zexoro keys new` creates a key pair. The private key never enters the repository; `zexoro pack` reads it from a file path or environment variable.
+- `zexoro keys new` creates a key pair. The private key never enters the repository; `zexoro feed add` reads it from a file path or environment variable (refined in `0005-nsis-updates.md`).
 - Key rotation: the install record holds a list of trusted public keys. A release can ship a new list; because that release is verified with a currently trusted key, the change is authenticated. Losing every trusted private key means installed copies can no longer be updated automatically — the documentation must say this plainly.
 
 ## 6. Install record and updater
