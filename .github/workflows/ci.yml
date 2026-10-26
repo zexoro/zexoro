@@ -49,6 +49,19 @@ jobs:
             echo "expected a non-zero exit code for unknown arguments" >&2
             exit 1
           fi
+          cli="$PWD/$cli"
+          work="$(mktemp -d)"
+          cd "$work"
+          "$cli" init
+          test -f zexoro.toml
+          set +e
+          "$cli" doctor
+          status=$?
+          set -e
+          if [ "$status" -ne 1 ]; then
+            echo "expected doctor to exit 1 for a fresh template (missing input files), got $status" >&2
+            exit 1
+          fi
 
       # Independent checks of zexoro's Authenticode signatures. The fixture tool signs small PE
       # files with throwaway certificates (RSA, ECDSA, and an ECDSA leaf under an RSA CA chain).

@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Zexoro.Core\Zexoro.Core.csproj" />
+    <ProjectReference Include="..\Zexoro.Signing\Zexoro.Signing.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Zexoro.Cli.Tests" />
