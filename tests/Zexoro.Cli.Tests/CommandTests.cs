@@ -29,6 +29,12 @@ public sealed class CommandTests : IDisposable
     private readonly StringWriter _stderr = new();
     private readonly Dictionary<string, string> _variables = [];
 
+    public CommandTests()
+    {
+        // Keeps the doctor's toolset check from extracting into the user's real cache.
+        _variables["ZEXORO_CACHE_DIR"] = Path.Combine(_dir.FullName, ".cache");
+    }
+
     public void Dispose()
     {
         _stdout.Dispose();
@@ -202,7 +208,7 @@ public sealed class CommandTests : IDisposable
 
         Assert.Empty(Lines(Stdout, "error"));
         Assert.Equal(["warning  [windows.signing] is not configured; installers will be unsigned"], Lines(Stdout, "warning"));
-        Assert.Equal(4, Lines(Stdout, "ok").Length);
+        Assert.Equal(5, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset
         Assert.Contains("0 errors, 1 warning.", Stdout, StringComparison.Ordinal);
     }
 

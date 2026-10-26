@@ -29,6 +29,12 @@ jobs:
         with:
           global-json-file: global.json
 
+      # Toolset archives pinned in eng/toolsets.json, downloaded by the build (see eng/Toolsets.targets).
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/zexoro-toolsets
+          key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
+
       - name: Build
         run: dotnet build -c Release
 
@@ -62,6 +68,50 @@ jobs:
             echo "expected doctor to exit 1 for a fresh template (missing input files), got $status" >&2
             exit 1
           fi
+
+      # Packs and signs an installer with the Native AOT binary, which extracts its embedded NSIS
+      # toolset and calls itself back (sign-file) from makensis. Any small PE file serves as the app.
+      - name: Smoke test pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli="$PWD/artifacts/publish/${{ matrix.rid }}/zexoro"
+          work="$(mktemp -d)"
+          export ZEXORO_CACHE_DIR="$work/cache"
+          cd "$work"
+          "$cli" init
+          set +e; "$cli" doctor > doctor.log; set -e
+          cat doctor.log
+          grep -q "bundled NSIS" doctor.log
+          nsis=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
+          mkdir -p "build/my app" assets
+          cp "$nsis/Plugins/x86-unicode/System.dll" "build/my app/App.exe"
+          cp "$nsis/Contrib/Graphics/Icons/modern-install.ico" assets/app.ico
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 2 -nodes \
+            -subj "/CN=zexoro smoke" -addext "extendedKeyUsage=codeSigning"
+          openssl pkcs12 -export -inkey key.pem -in cert.pem -out "it's a cert.pfx" -passout pass:smoke
+          cat > zexoro.toml <<'TOML'
+          [app]
+          id = "com.example.smoke"
+          name = "Smoke Test"
+          version = "1.0.0"
+          publisher = "zexoro"
+          icon = "assets/app.ico"
+
+          [input]
+          dir = "build/my app"
+          main = "App.exe"
+
+          [windows]
+
+          [windows.signing]
+          certificate = "it's a cert.pfx"
+          password = { env = "SMOKE_PASSWORD" }
+          TOML
+          SMOKE_PASSWORD=smoke "$cli" pack
+          installer=dist/SmokeTest-1.0.0-win-x86.exe
+          test -f "$installer"
+          test "$(head -c 2 "$installer")" = "MZ"
 
       # Independent checks of zexoro's Authenticode signatures. The fixture tool signs small PE
       # files with throwaway certificates (RSA, ECDSA, and an ECDSA leaf under an RSA CA chain).

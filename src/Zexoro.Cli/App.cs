@@ -12,8 +12,14 @@ internal static class App
         Commands:
           init [--force]             Create a commented zexoro.toml in the current directory.
                                      --force overwrites an existing file.
-          doctor [--config <path>]   Check the configuration, the files it names and the
-                                     signing certificate. --config defaults to ./zexoro.toml.
+          pack [--config <path>] [--version <v>] [--output <dir>]
+                                     Build the configured installers into --output (default:
+                                     dist/ next to the configuration file). --version
+                                     overrides app.version.
+          doctor [--config <path>]   Check the configuration, the files it names, the
+                                     signing certificate and the bundled tools.
+
+        --config defaults to ./zexoro.toml.
 
         Options:
           -h, --help       Show this help.
@@ -44,8 +50,12 @@ internal static class App
                 return ExitCodes.Success;
             case "init":
                 return InitCommand.Run(rest, stdout, stderr, environment);
+            case "pack":
+                return PackCommand.Run(rest, stdout, stderr, environment);
             case "doctor":
                 return DoctorCommand.Run(rest, stdout, stderr, environment);
+            case "sign-file":
+                return SignFileCommand.Run(rest, stdout, stderr, environment);
         }
 
         return UsageError(stderr, $"unrecognized arguments: {string.Join(' ', args)}");

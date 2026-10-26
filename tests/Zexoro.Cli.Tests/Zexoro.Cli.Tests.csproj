@@ -10,4 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Zexoro.Cli\Zexoro.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Zexoro.Signing.Fixtures\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>

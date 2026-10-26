@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zexoro.Formats.Nsis\Zexoro.Formats.Nsis.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Zexoro.Signing.Fixtures\Shared\TestPe.cs" Link="Shared\TestPe.cs" />
+  </ItemGroup>
+</Project>
