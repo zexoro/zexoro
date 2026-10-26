@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
 
 namespace Zexoro.Cli.Tests;
@@ -243,13 +244,24 @@ public sealed class CommandTests : IDisposable
     }
 
     [Fact]
-    public void Doctor_WarnsOnceWithoutUpdaters()
+    public void Doctor_WithoutUpdaterDirectory_WarnsOnlyWhenNoneAreEmbedded()
     {
         WriteProject();
         _variables.Remove("ZEXORO_UPDATER_DIR");
         Assert.Equal(ExitCodes.Success, Run("doctor"));
-        Assert.Contains("warning  this zexoro build has no embedded updaters; installers with [updates] need ZEXORO_UPDATER_DIR", Lines(Stdout, "warning"));
-        Assert.Equal(2, Lines(Stdout, "warning").Length);
+
+        // CI builds embed the updaters; local builds usually do not.
+        const string Warning = "warning  this zexoro build has no embedded updaters; installers with [updates] need ZEXORO_UPDATER_DIR";
+        if (BundledUpdaters.FindEmbedded(Zexoro.Platforms.Architecture.X64) is null)
+        {
+            Assert.Contains(Warning, Lines(Stdout, "warning"));
+            Assert.Equal(2, Lines(Stdout, "warning").Length);
+        }
+        else
+        {
+            Assert.DoesNotContain(Warning, Lines(Stdout, "warning"));
+            Assert.Single(Lines(Stdout, "warning"));
+        }
     }
 
     [Fact]
