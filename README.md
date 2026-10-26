@@ -113,6 +113,18 @@ The password reaches zexoro only through the environment; it is never written to
 - **Silent mode:** `/S` installs without UI; `/D=<dir>` chooses the location of a fresh install (an existing install is always upgraded where it is). The silent uninstall command is in the entry's `QuietUninstallString`.
 - **Exit codes:** `0` success, `1` cancelled, `2` aborted (unsupported Windows, or a per-machine install without administrator rights), `3` a newer version is already installed, `4` the application is running or its files are in use.
 
+## Update keys and feeds (preview)
+
+Automatic updates are being built (see [design 0005](docs/design/0005-nsis-updates.md)); installers do not include the updater yet. The signing side already works:
+
+```bash
+zexoro keys new                     # zexoro-update.key.pem (private) and zexoro-update.pub
+zexoro feed add --feed feed.json --key zexoro-update.key.pem <fragment.release.json>...
+zexoro feed verify --public-key zexoro-update.pub feed.json
+```
+
+`feed add` merges release fragments into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one. Keep the private key out of the repository and back it up: if every trusted private key is lost, installed copies can no longer be updated automatically.
+
 ## zexoro exit codes
 
 `0` success, `1` failure (including `doctor` finding errors), `2` usage error.

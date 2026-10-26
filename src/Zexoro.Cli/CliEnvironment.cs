@@ -14,6 +14,9 @@ internal sealed record CliEnvironment(string WorkingDirectory, Func<string, stri
     /// </summary>
     public IReadOnlyList<string> ZexoroCommand { get; init; } = DetectZexoroCommand();
 
+    /// <summary>The clock, for timestamps such as a feed's <c>published</c>.</summary>
+    public TimeProvider Time { get; init; } = TimeProvider.System;
+
     private static string[] DetectZexoroCommand()
     {
         var process = Environment.ProcessPath ?? "zexoro";

@@ -10,6 +10,7 @@
     <ProjectReference Include="..\Zexoro.Core\Zexoro.Core.csproj" />
     <ProjectReference Include="..\Zexoro.Signing\Zexoro.Signing.csproj" />
     <ProjectReference Include="..\Zexoro.Formats.Nsis\Zexoro.Formats.Nsis.csproj" />
+    <ProjectReference Include="..\Zexoro.Updates\Zexoro.Updates.csproj" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Zexoro.Cli.Tests" />

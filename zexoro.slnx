@@ -5,6 +5,7 @@
     <Project Path="src/Zexoro.Formats.Nsis/Zexoro.Formats.Nsis.csproj" />
     <Project Path="src/Zexoro.Signing/Zexoro.Signing.csproj" />
     <Project Path="src/Zexoro.Toml/Zexoro.Toml.csproj" />
+    <Project Path="src/Zexoro.Updates/Zexoro.Updates.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zexoro.Cli.Tests/Zexoro.Cli.Tests.csproj" />
@@ -13,5 +14,6 @@
     <Project Path="tests/Zexoro.Signing.Fixtures/Zexoro.Signing.Fixtures.csproj" />
     <Project Path="tests/Zexoro.Signing.Tests/Zexoro.Signing.Tests.csproj" />
     <Project Path="tests/Zexoro.Toml.Tests/Zexoro.Toml.Tests.csproj" />
+    <Project Path="tests/Zexoro.Updates.Tests/Zexoro.Updates.Tests.csproj" />
   </Folder>
 </Solution>
