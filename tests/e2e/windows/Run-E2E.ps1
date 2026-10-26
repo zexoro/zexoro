@@ -196,7 +196,7 @@ function Test-Installed($App, [string]$Version, [string]$Thumbprint) {
     Test-Equal $entry['NoRepair'] 1 'NoRepair'
     [void](Test-That ($entry['ZexoroVersionOrder'] -match '^[0-9]+$') 'ZexoroVersionOrder is set' "got '$($entry['ZexoroVersionOrder'])'")
     [void](Test-That ([int]$entry['EstimatedSize'] -gt 0) 'EstimatedSize is positive' "got '$($entry['EstimatedSize'])'")
-    $keys = Get-MatchingUninstallKeys $App
+    $keys = @(Get-MatchingUninstallKeys $App)
     [void](Test-That ($keys.Count -eq 1) 'exactly one uninstall entry' ($keys -join ', '))
 
     $target = if (Test-Path -LiteralPath $App.Shortcut) { Get-ShortcutTarget $App.Shortcut } else { '' }
@@ -266,7 +266,7 @@ function Test-Scope([string]$ScopeName, [string]$Thumbprint) {
         Assert-That (Test-Path -LiteralPath (Join-Path $DataDir 'cache\cache.txt')) 'the app wrote %LOCALAPPDATA%\ZexoroE2E\cache before the uninstall'
         [void](Test-That (Invoke-QuietUninstall $app) 'QuietUninstallString removed the key and the root')
         [void](Test-That ($null -eq (Get-UninstallEntry $app)) 'uninstall key is gone')
-        [void](Test-That ((Get-MatchingUninstallKeys $app).Count -eq 0) 'no uninstall entry is left in any hive')
+        [void](Test-That (@(Get-MatchingUninstallKeys $app).Count -eq 0) 'no uninstall entry is left in any hive')
         [void](Test-That (-not (Test-Path -LiteralPath $app.Root)) "install root $($app.Root) is gone")
         [void](Test-That (-not (Test-Path -LiteralPath $app.Shortcut)) 'Start menu shortcut is gone')
         [void](Test-That (Test-Path -LiteralPath (Join-Path $DataDir 'ran.txt')) 'user data (%LOCALAPPDATA%\ZexoroE2E\ran.txt) is kept')
