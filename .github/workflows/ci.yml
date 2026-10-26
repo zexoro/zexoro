@@ -114,6 +114,18 @@ jobs:
           test -f "$installer"
           test "$(head -c 2 "$installer")" = "MZ"
 
+      # End-to-end installers (docs/design/0003-mvp.md section 5), packed on every host; the
+      # e2e-windows job installs each host's set on Windows.
+      - name: Pack end-to-end installers
+        shell: bash
+        run: tests/e2e/pack.sh artifacts/publish/${{ matrix.rid }}/zexoro artifacts/e2e
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-installers-${{ matrix.os }}
+          path: artifacts/e2e
+          if-no-files-found: error
+
       # Independent checks of zexoro's Authenticode signatures. The fixture tool signs small PE
       # files with throwaway certificates (RSA, ECDSA, and an ECDSA leaf under an RSA CA chain).
       - name: Verify Authenticode signatures with osslsigncode
@@ -169,3 +181,39 @@ jobs:
           } finally {
             $roots | Remove-Item
           }
+
+  e2e-windows:
+    name: e2e on Windows (packed on ${{ matrix.host }})
+    needs: build
+    # Each host's installers are tested even when another host's build failed.
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: ubuntu-latest
+            powershell: pwsh
+          - host: macos-latest
+            powershell: pwsh
+          # Windows PowerShell 5.1, the default shell of a Windows machine reached over SSH.
+          - host: windows-latest
+            powershell: powershell
+    steps:
+      - uses: actions/checkout@v5
+
+      # The fixture app is framework-dependent and needs the .NET runtime.
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-installers-${{ matrix.host }}
+          path: e2e
+
+      - name: Install, upgrade and uninstall
+        shell: pwsh
+        run: |
+          & ${{ matrix.powershell }} -NoProfile -ExecutionPolicy Bypass -File tests/e2e/windows/Run-E2E.ps1 -InstallerDir e2e
+          exit $LASTEXITCODE
