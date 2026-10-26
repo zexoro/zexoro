@@ -95,8 +95,8 @@ public sealed class NsisToolset
 
         if (!OperatingSystem.IsWindows())
         {
-            // makensis converts strings with iconv; under the C or POSIX locale it aborts while
-            // generating language tables, so it always runs with a UTF-8 locale.
+            // A fixed UTF-8 locale keeps makensis's messages UTF-8 whatever the user's locale is,
+            // matching the encoding used to read them.
             start.Environment["LC_ALL"] = "C.UTF-8";
         }
 
