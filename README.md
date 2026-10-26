@@ -10,8 +10,8 @@ zexoro is a single self-contained executable; no .NET installation is needed and
 
 | Platform | Archive |
 | --- | --- |
-| Linux x64 (glibc 2.35+) | `zexoro-<version>-linux-x64.tar.gz` |
-| Linux arm64 (glibc 2.35+) | `zexoro-<version>-linux-arm64.tar.gz` |
+| Linux x64 (glibc 2.38+, e.g. Ubuntu 24.04) | `zexoro-<version>-linux-x64.tar.gz` |
+| Linux arm64 (glibc 2.38+) | `zexoro-<version>-linux-arm64.tar.gz` |
 | macOS Intel | `zexoro-<version>-osx-x64.tar.gz` |
 | macOS Apple silicon | `zexoro-<version>-osx-arm64.tar.gz` |
 | Windows x64 | `zexoro-<version>-win-x64.zip` |
