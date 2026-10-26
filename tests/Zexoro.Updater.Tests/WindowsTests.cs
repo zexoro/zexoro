@@ -57,10 +57,14 @@ public sealed class WindowsTests : IDisposable
         {
             FileSwap.Plan(_install.Root).Apply(FileMover.Instance);
             Assert.Equal("updater 2.0.0", File.ReadAllText(Path.Combine(_install.Root, "zexoro-updater.exe")));
-            Assert.Equal([Path.Combine(_install.Root, "zexoro-updater.exe.old")], FileSwap.DeleteOld(_install.Root));
+            // A running image cannot be deleted, but a FileShare.Delete handle can be under POSIX delete
+            // semantics (the default on current Windows), so either outcome is accepted here.
+            var left = FileSwap.DeleteOld(_install.Root);
+            Assert.True(left.Count == 0 || left.SequenceEqual([Path.Combine(_install.Root, "zexoro-updater.exe.old")]));
         }
 
         Assert.Empty(FileSwap.DeleteOld(_install.Root));
+        Assert.False(File.Exists(Path.Combine(_install.Root, "zexoro-updater.exe.old")));
     }
 
     [Theory]
