@@ -65,5 +65,6 @@ GitHub Actions on Ubuntu, macOS and Windows: build, test, publish the CLI with N
 ## Versions and branches
 
 - Semantic Versioning; `0.x` until the MVP, which is tagged `v0.1.0`.
-- `main` is protected by a ruleset: changes arrive through pull requests, force pushes are blocked, and CI must pass. No approval count is required; repository owners may bypass.
-- Each stage follows: one-page design → agreement → implementation and tests → pull request → review and merge.
+- `dev` is the integration branch. Topic branches merge into `dev` through pull requests after CI passes, without waiting for review.
+- `main` receives `dev` at milestones only — the first one is the MVP — through a pull request reviewed and merged by the maintainer. It is protected by a ruleset: changes arrive through pull requests, force pushes are blocked, and CI must pass. No approval count is required; repository admins may bypass.
+- Each stage starts with a one-page design in `docs/design/`, followed by implementation and tests.

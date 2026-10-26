@@ -4,8 +4,9 @@ zexoro packages applications built with any technology into native installers an
 
 ## Process
 
-- Every stage follows: one-page design → user agreement → implementation and tests → pull request → user review and merge. Do not start implementing before the design is agreed.
-- Pushing to branches other than `main` needs no confirmation. Anything touching `main` (push, merge) requires explicit approval; merge only the pull request the user names.
+- `dev` is the integration branch. Work happens on short-lived branches (`<stage>/<topic>`) merged into `dev` through pull requests once CI passes; these merges need no user review.
+- Before implementing a stage, write a one-page design in `docs/design/` and proceed without waiting for approval.
+- `main` only receives `dev`, at milestones (the first is the MVP), through a pull request the user reviews and merges. Never push to or merge into `main` yourself.
 - Keep repository content (code, comments, docs, commit messages, pull requests) in English.
 - Separate verified facts from recommendations and opinions. Disagree openly, with reasons.
 
