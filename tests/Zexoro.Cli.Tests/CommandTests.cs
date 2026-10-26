@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
 
 namespace Zexoro.Cli.Tests;
@@ -33,6 +34,9 @@ public sealed class CommandTests : IDisposable
     {
         // Keeps the doctor's toolset check from extracting into the user's real cache.
         _variables["ZEXORO_CACHE_DIR"] = Path.Combine(_dir.FullName, ".cache");
+
+        // Test builds embed no updaters; the doctor's updater check finds these instead.
+        _variables["ZEXORO_UPDATER_DIR"] = UpdaterFiles.Create(Path.Combine(_dir.FullName, ".updaters"));
     }
 
     public void Dispose()
@@ -208,7 +212,7 @@ public sealed class CommandTests : IDisposable
 
         Assert.Empty(Lines(Stdout, "error"));
         Assert.Equal(["warning  [windows.signing] is not configured; installers will be unsigned"], Lines(Stdout, "warning"));
-        Assert.Equal(5, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset
+        Assert.Equal(8, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset, 3 updaters
         Assert.Contains("0 errors, 1 warning.", Stdout, StringComparison.Ordinal);
     }
 
@@ -226,6 +230,47 @@ public sealed class CommandTests : IDisposable
         _stdout.GetStringBuilder().Clear();
         File.Move(Path.Combine(_dir.FullName, "conf", "app.toml"), ConfigPath);
         Assert.Equal(ExitCodes.Success, Run("doctor", $"--config={ConfigPath}"));
+    }
+
+    [Fact]
+    public void Doctor_ReportsTheUpdaters()
+    {
+        WriteProject();
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        foreach (var rid in new[] { "win-x86", "win-x64", "win-arm64" })
+        {
+            Assert.Contains($"ok       updater for {rid} from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Doctor_WithoutUpdaterDirectory_WarnsOnlyWhenNoneAreEmbedded()
+    {
+        WriteProject();
+        _variables.Remove("ZEXORO_UPDATER_DIR");
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+
+        // CI builds embed the updaters; local builds usually do not.
+        const string Warning = "warning  this zexoro build has no embedded updaters; installers with [updates] need ZEXORO_UPDATER_DIR";
+        if (BundledUpdaters.FindEmbedded(Zexoro.Platforms.Architecture.X64) is null)
+        {
+            Assert.Contains(Warning, Lines(Stdout, "warning"));
+            Assert.Equal(2, Lines(Stdout, "warning").Length);
+        }
+        else
+        {
+            Assert.DoesNotContain(Warning, Lines(Stdout, "warning"));
+            Assert.Single(Lines(Stdout, "warning"));
+        }
+    }
+
+    [Fact]
+    public void Doctor_ReportsAMissingUpdaterInTheOverrideDirectory()
+    {
+        WriteProject();
+        File.Delete(Path.Combine(_variables["ZEXORO_UPDATER_DIR"], "zexoro-updater-win-arm64.exe"));
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        Assert.Contains(Lines(Stdout, "warning"), l => l.Contains("zexoro-updater-win-arm64.exe does not exist", StringComparison.Ordinal));
     }
 
     [Fact]

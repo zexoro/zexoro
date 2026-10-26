@@ -9,8 +9,69 @@ permissions:
   contents: read
 
 jobs:
+  # zexoro-updater for every Windows architecture, published once with Native AOT (which can
+  # cross-compile between architectures of one operating system, not between systems) and
+  # embedded into every CLI build (docs/design/0005-nsis-updates.md section 3).
+  updater:
+    name: updater
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Publish zexoro-updater (Native AOT)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/updater
+          for rid in win-x86 win-x64 win-arm64; do
+            dotnet publish src/Zexoro.Updater -c Release -r "$rid" -o "artifacts/updater-publish/$rid"
+            cp "artifacts/updater-publish/$rid/zexoro-updater.exe" "artifacts/updater/zexoro-updater-$rid.exe"
+          done
+          cd artifacts/updater
+          sha256sum zexoro-updater-*.exe > SHA256SUMS
+          cat SHA256SUMS
+          ls -l
+
+      - name: Smoke test zexoro-updater
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $machines = @{ 'win-x86' = 0x014C; 'win-x64' = 0x8664; 'win-arm64' = 0xAA64 }
+          foreach ($rid in $machines.Keys) {
+            $exe = "artifacts/updater/zexoro-updater-$rid.exe"
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $exe))
+            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+            if ($machine -ne $machines[$rid]) { throw ("{0}: PE machine 0x{1:X4}" -f $rid, $machine) }
+            # The manifest must say asInvoker, or Windows' installer detection elevates an
+            # executable whose name contains 'update'.
+            if (-not ([Text.Encoding]::ASCII.GetString($bytes).Contains('level="asInvoker"'))) { throw "$rid has no asInvoker manifest" }
+            Write-Host "$rid ok ($($bytes.Length) bytes)"
+          }
+          # x64 and x86 run on the runner; outside an install the updater asks for a manual update (7).
+          foreach ($rid in 'win-x64', 'win-x86') {
+            $exe = Resolve-Path "artifacts/updater/zexoro-updater-$rid.exe"
+            & $exe --version
+            if ($LASTEXITCODE -ne 0) { throw "$rid --version failed" }
+            & $exe check --json
+            if ($LASTEXITCODE -ne 7) { throw "$rid check outside an install exited $LASTEXITCODE, expected 7" }
+          }
+          # The last native exit code (7) would otherwise become the step's result.
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.os }}
+    needs: updater
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -35,14 +96,22 @@ jobs:
           path: ~/.nuget/zexoro-toolsets
           key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
 
+      # The updaters published by the 'updater' job, embedded by eng/Updater.targets.
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+
       - name: Build
-        run: dotnet build -c Release
+        run: dotnet build -c Release -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
 
       - name: Test
         run: dotnet test -c Release --no-build
 
       - name: Publish CLI (Native AOT)
-        run: dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+        run: >
+          dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+          -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
 
       - name: Smoke test
         shell: bash
@@ -83,6 +152,9 @@ jobs:
           set +e; "$cli" doctor > doctor.log; set -e
           cat doctor.log
           grep -q "bundled NSIS" doctor.log
+          for rid in win-x86 win-x64 win-arm64; do
+            grep -Eq "^ok +bundled updater for $rid " doctor.log
+          done
           nsis=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
           mkdir -p "build/my app" assets
           cp "$nsis/Plugins/x86-unicode/System.dll" "build/my app/App.exe"

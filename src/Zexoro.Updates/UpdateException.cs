@@ -26,6 +26,9 @@ public enum UpdateErrorKind
 
     /// <summary>A key or key file is not valid.</summary>
     InvalidKey,
+
+    /// <summary>The install record is missing, malformed, or lacks what updates need.</summary>
+    InvalidInstallRecord,
 }
 
 /// <summary>An update step failed. The message is fit for the user.</summary>

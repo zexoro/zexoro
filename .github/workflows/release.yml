@@ -1,8 +1,9 @@
 name: Release
 
 # Builds the zexoro CLI with Native AOT for every supported RID, each on a runner of that operating
-# system and architecture with the pinned toolset embedded (eng/toolsets.json), smoke-tests every
-# binary where it was built, and publishes the archives plus SHA256SUMS as a GitHub release.
+# system and architecture with the pinned toolset embedded (eng/toolsets.json) and the updaters for
+# every Windows architecture (built once by the 'updater' job, eng/Updater.targets), smoke-tests
+# every binary where it was built, and publishes the archives plus SHA256SUMS as a GitHub release.
 #
 # - Tag v<version> (for example v0.1.0): builds and publishes the release <version>.
 # - Pull requests that change this workflow or eng/, and manual runs with dry-run (the default):
@@ -70,9 +71,52 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
+  # zexoro-updater for win-x86, win-x64 and win-arm64 with the release version (which a release's
+  # minimumUpdater is compared with), published once and embedded into every CLI build.
+  updater:
+    name: updater
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Publish zexoro-updater (Native AOT)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/updater
+          for rid in win-x86 win-x64 win-arm64; do
+            dotnet publish src/Zexoro.Updater -c Release -r "$rid" -o "artifacts/updater-publish/$rid" \
+              -p:Version="$VERSION" -p:IncludeSourceRevisionInInformationalVersion=false
+            cp "artifacts/updater-publish/$rid/zexoro-updater.exe" "artifacts/updater/zexoro-updater-$rid.exe"
+          done
+          for rid in win-x64 win-x86; do
+            actual=$("artifacts/updater/zexoro-updater-$rid.exe" --version | tr -d '\r')
+            if [ "$actual" != "$VERSION" ]; then
+              echo "::error::zexoro-updater-$rid --version printed '$actual', expected '$VERSION'"
+              exit 1
+            fi
+          done
+          cd artifacts/updater
+          sha256sum zexoro-updater-*.exe > SHA256SUMS
+          cat SHA256SUMS
+
+      # Not named zexoro-*: the checksums job collects those as release files.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.rid }}
-    needs: version
+    needs: [version, updater]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -105,13 +149,19 @@ jobs:
           path: ~/.nuget/zexoro-toolsets
           key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+
       # Version sets the informational version that 'zexoro --version' prints; without the source
-      # revision it is exactly the release version.
+      # revision it is exactly the release version. A release must embed every updater.
       - name: Publish (Native AOT)
         shell: bash
         run: >
           dotnet publish src/Zexoro.Cli -c Release -r "$RID" -o artifacts/publish
           -p:Version="$VERSION" -p:IncludeSourceRevisionInInformationalVersion=false
+          -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
 
       - name: Smoke test
         shell: bash
@@ -139,6 +189,12 @@ jobs:
             echo "::error::doctor does not report the bundled NSIS $nsis as ok"
             exit 1
           fi
+          for updater in win-x86 win-x64 win-arm64; do
+            if ! grep -Eq "^ok +bundled updater for $updater " doctor.log; then
+              echo "::error::doctor does not report the bundled updater for $updater as ok"
+              exit 1
+            fi
+          done
           tools=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
           if [ "$RUNNER_OS" = Linux ]; then
             for binary in "$cli" "$tools/Bin/makensis"; do
