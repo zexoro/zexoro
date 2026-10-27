@@ -96,6 +96,14 @@ internal sealed class SystemProcessHost : IProcessHost
     /// <summary>ERROR_CANCELLED: the user declined the UAC prompt.</summary>
     private const int ErrorCancelled = 1223;
 
+    /// <remarks>
+    /// The process is not a child of the updater (the application started the updater), so there is
+    /// no handle to wait on outside Windows. The BCL covers that: on Linux and macOS
+    /// <see cref="Process.WaitForExit(TimeSpan)"/> on a process that is not a child polls
+    /// <c>kill(pid, 0)</c> until it fails with <c>ESRCH</c> (docs/design/0006-desktop-formats.md
+    /// section 2), which <c>ProcessTests</c> checks on both systems. A process that has exited but
+    /// was not reaped by its parent yet still counts as running there.
+    /// </remarks>
     public bool WaitForExit(int processId, TimeSpan timeout)
     {
         Process process;
@@ -218,7 +226,7 @@ internal sealed class WindowsUninstallRegistry : IUninstallRegistry
         record.Target.Arch is "x64" or "arm64" ? RegistryView.Registry64 : RegistryView.Registry32);
 }
 
-/// <summary>Stands in for the registry where there is none; the updater only updates Windows installs.</summary>
+/// <summary>Stands in for the registry outside Windows, where no format has an uninstall entry.</summary>
 internal sealed class UnsupportedRegistry : IUninstallRegistry
 {
     public UninstallEntry? Read(UpdateInstallRecord record) => throw new PlatformNotSupportedException("uninstall entries exist only on Windows");

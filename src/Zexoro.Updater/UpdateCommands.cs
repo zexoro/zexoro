@@ -13,7 +13,7 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         {
             record = UpdateInstallRecord.Load(Path.Combine(environment.DefaultRoot, UpdateInstallRecord.FileName));
             var installed = record.ToInstalledApp();
-            var state = new UpdaterState(environment.LocalAppData, record.App);
+            var state = new UpdaterState(environment.StateBase, record.App);
             using var http = environment.CreateHttpClient();
             var client = new UpdateClient(http);
             var selection = await client.CheckAsync(installed, new FeedSequenceStore(state.SequenceFile), UpdaterVersion.Current, cancellationToken).ConfigureAwait(false);
@@ -89,8 +89,13 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         state.WriteStaged(new StagedUpdate(installed.App, installed.Channel, release.Version, release.Notes, file, artifact.Size, artifact.Sha256, artifact.Url));
     }
 
-    /// <summary>The downloaded file's extension: <c>.zip</c> for a portable zip, <c>.exe</c> (an installer) otherwise.</summary>
-    internal static string ExtensionFor(string format) => format == ApplyCommand.ZipFormat ? ".zip" : ".exe";
+    /// <summary>The downloaded file's extension: <c>.zip</c> or <c>.tar.gz</c> for a portable archive, <c>.exe</c> (an installer) otherwise.</summary>
+    internal static string ExtensionFor(string format) => format switch
+    {
+        ApplyCommand.ZipFormat => ".zip",
+        ApplyCommand.TarGzFormat => ".tar.gz",
+        _ => ".exe",
+    };
 
     /// <summary>
     /// The URL's file name when it is a plain name with <paramref name="extension"/>, otherwise one

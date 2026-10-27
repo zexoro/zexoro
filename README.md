@@ -131,7 +131,7 @@ download = "https://example.com/dl/{version}/{file}"
 keys     = [{ file = "zexoro-update.pub" }]
 ```
 
-`pack` needs a `zexoro-updater` for the installer's architecture: release builds of zexoro embed them for x86, x64 and arm64; `ZEXORO_UPDATER_DIR` overrides them (`zexoro doctor` reports which are available).
+`pack` needs a `zexoro-updater` for the installer's architecture: release builds of zexoro embed them for every platform the updater is built for (Windows x86, x64 and arm64; Linux x64 and arm64, glibc and musl; macOS x64 and arm64), so any host can pack for any target; `ZEXORO_UPDATER_DIR` overrides them (`zexoro doctor` reports which are available). The Linux glibc updaters are built on glibc 2.28 and run on RHEL 8, Debian 10, Ubuntu 18.10 and later (they reference no symbol newer than `GLIBC_2.17`, but nothing older than 2.28 is tested); the musl ones are built on Alpine 3.21.
 
 ## Signing
 
@@ -205,7 +205,7 @@ zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 | --- | --- |
 | `ZEXORO_CACHE_DIR` | Where the bundled toolset is extracted. Default: `%LOCALAPPDATA%\zexoro`, `~/Library/Caches/zexoro` or `$XDG_CACHE_HOME/zexoro`. |
 | `ZEXORO_NSIS_DIR` | Use this NSIS directory instead of the bundled one (development). |
-| `ZEXORO_UPDATER_DIR` | A directory with `zexoro-updater-win-<arch>.exe` files to put into installers and zip archives instead of the embedded ones (development). |
+| `ZEXORO_UPDATER_DIR` | A directory with `zexoro-updater-<rid>` files (`zexoro-updater-win-<arch>.exe` on Windows, e.g. `zexoro-updater-linux-musl-x64`) to put into packages instead of the embedded ones (development). |
 
 ## GitHub Actions
 

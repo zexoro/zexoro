@@ -25,7 +25,7 @@ internal sealed class TestInstall : IDisposable
         Directory.CreateDirectory(Temp);
         File.WriteAllText(Path.Combine(Root, "app", main), "app " + version);
         File.WriteAllText(Path.Combine(Root, "app", "lib", "data.txt"), "data " + version);
-        File.WriteAllText(Path.Combine(Root, "zexoro-updater.exe"), "updater " + version);
+        File.WriteAllText(Path.Combine(Root, UpdaterName), "updater " + version);
         File.WriteAllBytes(Path.Combine(Root, UpdateInstallRecord.FileName), Record(version, main));
         if (format == "nsis")
         {
@@ -43,7 +43,15 @@ internal sealed class TestInstall : IDisposable
     public string Format { get; }
 
     /// <summary>The artifact's file extension.</summary>
-    public string Extension => Format == "zip" ? ".zip" : ".exe";
+    public string Extension => Format switch
+    {
+        "zip" => ".zip",
+        "tar-gz" => ".tar.gz",
+        _ => ".exe",
+    };
+
+    /// <summary>The updater's file name in the root: without <c>.exe</c> for a Linux tar.gz.</summary>
+    public string UpdaterName => Format == "tar-gz" ? "zexoro-updater" : "zexoro-updater.exe";
 
     public string Root { get; }
 
@@ -73,9 +81,9 @@ internal sealed class TestInstall : IDisposable
 
     public UpdaterEnvironment Environment(string? executable = null) => new()
     {
-        ExecutablePath = executable ?? Path.Combine(Root, "zexoro-updater.exe"),
+        ExecutablePath = executable ?? Path.Combine(Root, UpdaterName),
         ProcessId = 4242,
-        LocalAppData = LocalAppData,
+        StateBase = LocalAppData,
         TempDirectory = Temp,
         Processes = Processes,
         Registry = Registry,
@@ -201,6 +209,9 @@ internal sealed class FakeProcesses(TestInstall install) : IProcessHost
 
     public List<(string Path, IReadOnlyList<string> Arguments)> Started { get; } = [];
 
+    /// <summary>Unix only: the modes of each temporary updater copy's directory and file when it ran.</summary>
+    public List<(UnixFileMode Directory, UnixFileMode File)> CopyModes { get; } = [];
+
     public bool WaitForExit(int processId, TimeSpan timeout)
     {
         Log.Add($"wait {processId}");
@@ -213,9 +224,14 @@ internal sealed class FakeProcesses(TestInstall install) : IProcessHost
     public int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string>? environment = null)
     {
         Log.Add($"run {Path.GetFileName(path)} {string.Join(' ', arguments)}");
-        if (Path.GetFileName(path) == "zexoro-updater.exe")
+        if (Path.GetFileName(path) == install.UpdaterName)
         {
             Assert.StartsWith(install.Temp, path, StringComparison.Ordinal);
+            if (!OperatingSystem.IsWindows())
+            {
+                CopyModes.Add((File.GetUnixFileMode(Path.GetDirectoryName(path)!), File.GetUnixFileMode(path)));
+            }
+
             return UpdaterApp.Run(arguments, install.Stdout, install.Stderr, install.Environment(path));
         }
 

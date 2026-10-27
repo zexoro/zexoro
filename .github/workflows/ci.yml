@@ -9,16 +9,34 @@ permissions:
   contents: read
 
 jobs:
-  # zexoro-updater for every Windows architecture, published once with Native AOT (which can
-  # cross-compile between architectures of one operating system, not between systems) and
-  # embedded into every CLI build (docs/design/0005-nsis-updates.md section 3).
-  updater:
-    name: updater
-    runs-on: windows-latest
+  # zexoro-updater for every runtime identifier, published with Native AOT and embedded into every
+  # CLI build (docs/design/0005-nsis-updates.md section 3, 0006-desktop-formats.md section 2).
+  # Native AOT cross-compiles between architectures of one operating system only on Windows and
+  # macOS, and Linux builds must link against an old C library, so each leg builds on a runner (and,
+  # for Linux, in a container of an old distribution) of its own system and architecture:
+  # eng/updater/publish.sh and publish-in-container.sh. The 'updater' job merges the legs.
+  updater-build:
+    name: updater (${{ matrix.leg }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: windows
+            os: windows-latest
+          - leg: linux-x64
+            os: ubuntu-24.04
+          - leg: linux-arm64
+            os: ubuntu-24.04-arm
+          - leg: osx-arm64
+            os: macos-15
+          - leg: osx-x64
+            os: macos-15-intel
     steps:
       - uses: actions/checkout@v5
 
       - uses: actions/setup-dotnet@v5
+        if: runner.os != 'Linux'
         with:
           global-json-file: global.json
 
@@ -26,17 +44,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p artifacts/updater
-          for rid in win-x86 win-x64 win-arm64; do
-            dotnet publish src/Zexoro.Updater -c Release -r "$rid" -o "artifacts/updater-publish/$rid"
-            cp "artifacts/updater-publish/$rid/zexoro-updater.exe" "artifacts/updater/zexoro-updater-$rid.exe"
-          done
-          cd artifacts/updater
-          sha256sum zexoro-updater-*.exe > SHA256SUMS
-          cat SHA256SUMS
-          ls -l
+          echo "### zexoro-updater (${{ matrix.leg }})" >> "$GITHUB_STEP_SUMMARY"
+          case "${{ matrix.leg }}" in
+            windows)
+              for rid in win-x86 win-x64; do eng/updater/publish.sh "$rid" artifacts/updater; done
+              # The runner is x64; win-arm64 is built but cannot run here.
+              eng/updater/publish.sh win-arm64 artifacts/updater norun ;;
+            linux-*)
+              arch="${{ matrix.leg }}"; arch="${arch#linux-}"
+              eng/updater/publish-in-container.sh "linux-$arch" artifacts/updater
+              eng/updater/publish-in-container.sh "linux-musl-$arch" artifacts/updater ;;
+            osx-*)
+              eng/updater/publish.sh "${{ matrix.leg }}" artifacts/updater ;;
+          esac
+          ls -l artifacts/updater
 
-      - name: Smoke test zexoro-updater
+      - name: Check the Windows executables
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -52,16 +76,47 @@ jobs:
             if (-not ([Text.Encoding]::ASCII.GetString($bytes).Contains('level="asInvoker"'))) { throw "$rid has no asInvoker manifest" }
             Write-Host "$rid ok ($($bytes.Length) bytes)"
           }
-          # x64 and x86 run on the runner; outside an install the updater asks for a manual update (7).
-          foreach ($rid in 'win-x64', 'win-x86') {
-            $exe = Resolve-Path "artifacts/updater/zexoro-updater-$rid.exe"
-            & $exe --version
-            if ($LASTEXITCODE -ne 0) { throw "$rid --version failed" }
-            & $exe check --json
-            if ($LASTEXITCODE -ne 7) { throw "$rid check outside an install exited $LASTEXITCODE, expected 7" }
-          }
-          # The last native exit code (7) would otherwise become the step's result.
-          exit 0
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-leg-${{ matrix.leg }}
+          path: artifacts/updater
+          if-no-files-found: error
+
+  updater:
+    name: updater
+    needs: updater-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: updater-leg-*
+          path: artifacts/updater
+          merge-multiple: true
+
+      - name: Check and checksum every updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd artifacts/updater
+          expected="zexoro-updater-linux-arm64
+          zexoro-updater-linux-musl-arm64
+          zexoro-updater-linux-musl-x64
+          zexoro-updater-linux-x64
+          zexoro-updater-osx-arm64
+          zexoro-updater-osx-x64
+          zexoro-updater-win-arm64.exe
+          zexoro-updater-win-x64.exe
+          zexoro-updater-win-x86.exe"
+          actual=$(ls | sort)
+          if [ "$actual" != "$(echo "$expected" | sed 's/^ *//')" ]; then
+            echo "::error::unexpected updater files:"$'\n'"$actual"
+            exit 1
+          fi
+          file zexoro-updater-*
+          sha256sum zexoro-updater-* > SHA256SUMS
+          cat SHA256SUMS
+          ls -l | tee -a "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -152,7 +207,7 @@ jobs:
           set +e; "$cli" doctor > doctor.log; set -e
           cat doctor.log
           grep -q "bundled NSIS" doctor.log
-          for rid in win-x86 win-x64 win-arm64; do
+          for rid in win-x86 win-x64 win-arm64 linux-x64 linux-arm64 linux-musl-x64 linux-musl-arm64 osx-x64 osx-arm64; do
             grep -Eq "^ok +bundled updater for $rid " doctor.log
           done
           nsis=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
@@ -185,6 +240,21 @@ jobs:
           installer=dist/SmokeTest-1.0.0-win-x86.exe
           test -f "$installer"
           test "$(head -c 2 "$installer")" = "MZ"
+
+      # The host's zexoro-updater against a local feed: check, download and apply of a tar.gz
+      # (docs/design/0006-desktop-formats.md section 2). On Linux the musl build runs in Alpine too.
+      - name: Smoke test zexoro-updater
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli=artifacts/publish/${{ matrix.rid }}/zexoro
+          tests/e2e/unix/check-updater.sh "$cli" artifacts/updater/zexoro-updater-${{ matrix.rid }}
+          if [ "$RUNNER_OS" = Linux ]; then
+            export TMPDIR=/tmp
+            tests/e2e/unix/check-updater.sh "$cli" artifacts/updater/zexoro-updater-linux-musl-x64 \
+              docker run --rm --network host --user "$(id -u):$(id -g)" -e HOME -e XDG_STATE_HOME -e TMPDIR -v /tmp:/tmp alpine:3.21
+          fi
 
       # End-to-end installers and portable zips (docs/design/0003-mvp.md section 5,
       # 0006-desktop-formats.md section 5), packed on every host; the e2e-windows job tests each
