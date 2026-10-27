@@ -50,19 +50,42 @@ internal interface IFileMover
     void Move(string source, string destination);
 }
 
+/// <summary>
+/// Real renames. A rename that fails because another process has the item open is retried for
+/// about two seconds: on Windows, virus scanners and the search indexer briefly open files that were
+/// just extracted or started (seen on a test machine renaming the running zexoro-updater.exe).
+/// </summary>
 internal sealed class FileMover : IFileMover
 {
+    private const int Attempts = 10;
+
+    /// <summary>ERROR_SHARING_VIOLATION and ERROR_LOCK_VIOLATION as HRESULTs.</summary>
+    private const int SharingViolation = unchecked((int)0x80070020);
+    private const int LockViolation = unchecked((int)0x80070021);
+
     public static FileMover Instance { get; } = new();
 
     public void Move(string source, string destination)
     {
-        if (Directory.Exists(source))
+        for (var attempt = 1; ; attempt++)
         {
-            Directory.Move(source, destination);
-        }
-        else
-        {
-            File.Move(source, destination);
+            try
+            {
+                if (Directory.Exists(source))
+                {
+                    Directory.Move(source, destination);
+                }
+                else
+                {
+                    File.Move(source, destination);
+                }
+
+                return;
+            }
+            catch (IOException ex) when (attempt < Attempts && ex.HResult is SharingViolation or LockViolation)
+            {
+                Thread.Sleep(50 * attempt);
+            }
         }
     }
 }

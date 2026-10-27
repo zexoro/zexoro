@@ -83,20 +83,26 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         }
 
         state.ClearDownloads();
-        var file = FileNameFor(installed.App, release.Version, artifact.Url);
+        var file = FileNameFor(installed.App, release.Version, artifact.Url, ExtensionFor(installed.Target.Format));
         log.WriteLine($"Downloading {artifact.Url} ({artifact.Size} bytes)");
         await client.DownloadAsync(artifact, Path.Combine(state.Downloads, file), cancellationToken).ConfigureAwait(false);
         state.WriteStaged(new StagedUpdate(installed.App, installed.Channel, release.Version, release.Notes, file, artifact.Size, artifact.Sha256, artifact.Url));
     }
 
-    /// <summary>The URL's file name when it is a plain <c>.exe</c> name, otherwise one made from the app and version.</summary>
-    internal static string FileNameFor(string app, SemanticVersion version, Uri url)
+    /// <summary>The downloaded file's extension: <c>.zip</c> for a portable zip, <c>.exe</c> (an installer) otherwise.</summary>
+    internal static string ExtensionFor(string format) => format == ApplyCommand.ZipFormat ? ".zip" : ".exe";
+
+    /// <summary>
+    /// The URL's file name when it is a plain name with <paramref name="extension"/>, otherwise one
+    /// made from the app and version.
+    /// </summary>
+    internal static string FileNameFor(string app, SemanticVersion version, Uri url, string extension)
     {
         var name = Path.GetFileName(Uri.UnescapeDataString(url.AbsolutePath));
-        var plain = name.Length is > 4 and <= 128
-            && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)
+        var plain = name.Length > extension.Length && name.Length <= 128
+            && name.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
             && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_')
             && !name.StartsWith('.');
-        return plain ? name : $"{app}-{version}.exe";
+        return plain ? name : $"{app}-{version}{extension}";
     }
 }

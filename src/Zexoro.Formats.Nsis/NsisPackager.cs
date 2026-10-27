@@ -82,14 +82,7 @@ public static class NsisPackager
     /// </summary>
     public static string GetOutputFileName(AppConfig app, Architecture architecture)
     {
-        ArgumentNullException.ThrowIfNull(app);
-        var name = string.Concat(app.Name.Where(c => char.IsLetterOrDigit(c) || c is '.' or '-' or '_')).Trim('.');
-        if (name.Length == 0)
-        {
-            name = app.Id[(app.Id.LastIndexOf('.') + 1)..];
-        }
-
-        return $"{name}-{app.Version}-win-{architecture.Name}.exe";
+        return WindowsPayload.ArtifactFileName(app, architecture, ".exe");
     }
 
     /// <summary>Builds the installer.</summary>
@@ -147,9 +140,9 @@ public static class NsisPackager
         try
         {
             var appDirectory = Path.Combine(staging, NsisInstallerSpec.AppDirectoryName);
-            var emptyDirectories = CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
+            var emptyDirectories = WindowsPayload.CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
             var signed = request.Signing is { } signing
-                ? SignApplicationFiles(appDirectory, input.Main.Value, windows.Sign, signing, config.App, request.Log)
+                ? WindowsPayload.SignApplicationFiles(appDirectory, input.Main.Value, windows.Sign, signing, config.App, request.Log)
                 : [];
 
             // Measured after signing, as installed: zexoro-updater computes the same value from app.new.
@@ -158,13 +151,7 @@ public static class NsisPackager
             File.Copy(config.App.Icon.FullPath, Path.Combine(staging, NsisInstallerSpec.IconFileName));
             if (updater is not null)
             {
-                request.Log?.WriteLine($"Adding {UpdaterBinary.FileName} ({updater.Source})");
-                var updaterPath = Path.Combine(staging, NsisInstallerSpec.UpdaterFileName);
-                updater.WriteTo(updaterPath);
-                if (request.Signing is { } updaterSigning)
-                {
-                    SignUpdater(updaterPath, updaterSigning, config.App, request.Log);
-                }
+                WindowsPayload.StageUpdater(updater, Path.Combine(staging, NsisInstallerSpec.UpdaterFileName), request.Signing, config.App, request.Log);
             }
 
             string? license = null;
@@ -253,105 +240,6 @@ public static class NsisPackager
         return stream.ReadAtLeast(header, 6, throwOnEndOfStream: false) == 6
             && header[0] == 0 && header[1] == 0 && header[2] == 1 && header[3] == 0
             && (header[4] != 0 || header[5] != 0);
-    }
-
-    /// <summary>
-    /// Copies the input directory, including hidden files, skipping <paramref name="exclude"/> (the
-    /// output directory, when it lies inside the input). Returns the empty directories.
-    /// </summary>
-    private static List<string> CopyDirectory(string source, string destination, string exclude)
-    {
-        var options = new EnumerationOptions { RecurseSubdirectories = false, AttributesToSkip = 0, IgnoreInaccessible = false };
-        var empty = new List<string>();
-        var excludePrefix = exclude.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-
-        void Copy(string from, string to, string relative)
-        {
-            Directory.CreateDirectory(to);
-            var any = false;
-            foreach (var file in Directory.EnumerateFiles(from, "*", options).Order(StringComparer.Ordinal))
-            {
-                File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
-                any = true;
-            }
-
-            foreach (var directory in Directory.EnumerateDirectories(from, "*", options).Order(StringComparer.Ordinal))
-            {
-                if ((directory + Path.DirectorySeparatorChar).StartsWith(excludePrefix, StringComparison.Ordinal))
-                {
-                    continue;
-                }
-
-                any = true;
-                var name = Path.GetFileName(directory);
-                Copy(directory, Path.Combine(to, name), relative.Length == 0 ? name : relative + "/" + name);
-            }
-
-            if (!any && relative.Length > 0)
-            {
-                empty.Add(relative);
-            }
-        }
-
-        Copy(source, destination, string.Empty);
-        return empty;
-    }
-
-    private static List<string> SignApplicationFiles(
-        string appDirectory, string main, WindowsSignFiles which, NsisSigning signing, AppConfig app, TextWriter? log)
-    {
-        IEnumerable<string> candidates = which == WindowsSignFiles.All
-            ? Directory.EnumerateFiles(appDirectory, "*", new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = 0 })
-                .Where(f => f.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) || f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                .Order(StringComparer.Ordinal)
-            : [Path.Combine(appDirectory, main.Replace('/', Path.DirectorySeparatorChar))];
-
-        var options = new SigningOptions
-        {
-            Credential = signing.Credential,
-            TimestampUrl = signing.Timestamp,
-            Description = app.Name,
-            DescriptionUrl = app.Url,
-        };
-        var signed = new List<string>();
-        foreach (var file in candidates)
-        {
-            var relative = Path.GetRelativePath(appDirectory, file).Replace('\\', '/');
-            if (AuthenticodeSigner.IsSigned(file))
-            {
-                log?.WriteLine($"Skipping {relative}: already signed");
-                continue;
-            }
-
-            log?.WriteLine($"Signing {relative}");
-            AuthenticodeSigner.SignFile(file, options);
-            signed.Add(relative);
-        }
-
-        return signed;
-    }
-
-    /// <summary>
-    /// Signs the staged updater (after <see cref="UpdaterBinary.WriteTo"/> checked its hash) with the
-    /// application's certificate, so it carries the same publisher as the files it updates. An
-    /// updater that is already signed keeps its signature, like application files.
-    /// </summary>
-    private static void SignUpdater(string path, NsisSigning signing, AppConfig app, TextWriter? log)
-    {
-        if (AuthenticodeSigner.IsSigned(path))
-        {
-            log?.WriteLine($"Skipping {UpdaterBinary.FileName}: already signed");
-            return;
-        }
-
-        log?.WriteLine($"Signing {UpdaterBinary.FileName}");
-        AuthenticodeSigner.SignFile(path, new SigningOptions
-        {
-            Credential = signing.Credential,
-            TimestampUrl = signing.Timestamp,
-            Description = app.Name,
-            DescriptionUrl = app.Url,
-        });
     }
 
     /// <summary>

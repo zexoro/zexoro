@@ -9,7 +9,7 @@
     <AnalysisLevel>latest-recommended</AnalysisLevel>
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <VersionPrefix>0.1.0</VersionPrefix>
+    <VersionPrefix>0.2.0</VersionPrefix>
     <VersionSuffix>dev</VersionSuffix>
     <Authors>zexoro contributors</Authors>
     <Copyright>Copyright (c) 2026 zexoro contributors</Copyright>

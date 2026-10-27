@@ -186,8 +186,9 @@ jobs:
           test -f "$installer"
           test "$(head -c 2 "$installer")" = "MZ"
 
-      # End-to-end installers (docs/design/0003-mvp.md section 5), packed on every host; the
-      # e2e-windows job installs each host's set on Windows.
+      # End-to-end installers and portable zips (docs/design/0003-mvp.md section 5,
+      # 0006-desktop-formats.md section 5), packed on every host; the e2e-windows job tests each
+      # host's set on Windows.
       - name: Pack end-to-end installers
         shell: bash
         run: tests/e2e/pack.sh artifacts/publish/${{ matrix.rid }}/zexoro artifacts/e2e
@@ -299,3 +300,34 @@ jobs:
         run: |
           & ${{ matrix.powershell }} -NoProfile -ExecutionPolicy Bypass -File tests/e2e/windows/Run-UpdateE2E.ps1 -InstallerDir e2e
           exit $LASTEXITCODE
+
+      # The portable zip: extract, run, and the shared update scenario of
+      # docs/design/0006-desktop-formats.md section 5, plus a folder that is not writable (exit 7).
+      - name: Portable zip
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ${{ matrix.powershell }} -NoProfile -ExecutionPolicy Bypass -File tests/e2e/windows/Run-ZipE2E.ps1 -InstallerDir e2e
+          exit $LASTEXITCODE
+
+  # A zip of fixed files must have the same bytes whichever host packed it
+  # (docs/design/0006-desktop-formats.md section 5).
+  reproducible:
+    name: zip is reproducible across hosts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-installers-*
+          path: e2e
+
+      - name: Compare the repro zips
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum e2e/*/repro/*.zip
+          count=$(ls e2e/*/repro/*.zip | wc -l)
+          test "$count" -eq 3 || { echo "::error::expected 3 repro zips, found $count"; exit 1; }
+          distinct=$(sha256sum e2e/*/repro/*.zip | cut -d' ' -f1 | sort -u | wc -l)
+          test "$distinct" -eq 1 || { echo "::error::the repro zip differs between pack hosts"; exit 1; }

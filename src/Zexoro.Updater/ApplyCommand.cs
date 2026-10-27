@@ -14,7 +14,8 @@ internal sealed record ApplyOptions(int? WaitPid, bool Restart, bool Json, strin
 /// <c>apply</c> (docs/design/0005-nsis-updates.md section 3). The updater in the install root checks
 /// the staged installer, waits for the application, copies itself to <c>%TEMP%</c> and hands off to
 /// that copy (<c>apply --from-root</c>), which runs the installer: in stage mode followed by a rename
-/// swap for <c>replace</c>, or through <c>ShellExecute</c> for <c>reinstall</c>.
+/// swap for <c>replace</c>, or through <c>ShellExecute</c> for <c>reinstall</c>. A portable zip
+/// (<c>replace</c>, format <c>zip</c>) is extracted instead of run (docs/design/0006-desktop-formats.md).
 /// </summary>
 internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter log)
 {
@@ -22,6 +23,9 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
     public const string CopyDirectoryPrefix = "zexoro-updater-";
     public const string ReplaceStrategy = "replace";
     public const string ReinstallStrategy = "reinstall";
+
+    /// <summary>The record format of a portable zip, updated by extracting the next archive (docs/design/0006-desktop-formats.md).</summary>
+    public const string ZipFormat = "zip";
 
     /// <summary>Exit code of an installer that found a newer version installed (NsisScript).</summary>
     public const int InstallerNewerVersionInstalled = 3;
@@ -177,13 +181,15 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
 
             result = record.Strategy switch
             {
+                ReplaceStrategy when record.Target.Format == ZipFormat => ReplaceFromArchive(root, record, staged, locked, options.Restart),
                 ReplaceStrategy => Replace(root, record, staged, installer, options.Restart),
                 ReinstallStrategy => Reinstall(root, record, staged, installer, options.Restart, movedUpdater: null),
                 _ => UpdaterResult.Fail(UpdaterExitCodes.ManualUpdateNeeded, $"this updater cannot apply updates with the '{record.Strategy}' strategy; update manually", installed),
             };
         }
 
-        if (result.ExitCode is UpdaterExitCodes.Success or UpdaterExitCodes.UpToDate)
+        // A verification failure here is an archive that cannot be a valid update: download it again.
+        if (result.ExitCode is UpdaterExitCodes.Success or UpdaterExitCodes.UpToDate or UpdaterExitCodes.VerificationFailed)
         {
             state.ClearDownloads();
         }
@@ -322,6 +328,124 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         }
 
         return Applied(record, staged);
+    }
+
+    /// <summary>
+    /// <c>replace</c> for a portable zip: extracts the verified archive into <c>app.new</c> and the
+    /// <c>.new</c> root files, checks the staged record, then swaps by rename. Nothing is registered,
+    /// so nothing else is written; a changed <c>main</c> is fine, as there are no shortcuts.
+    /// </summary>
+    private UpdaterResult ReplaceFromArchive(string root, UpdateInstallRecord record, StagedUpdate staged, Stream archive, bool restart)
+    {
+        var installed = record.Version.ToString();
+        if (CheckWritable(root) is { } notWritable)
+        {
+            return UpdaterResult.Fail(UpdaterExitCodes.ManualUpdateNeeded, notWritable, installed);
+        }
+
+        try
+        {
+            FileSwap.DeleteLeftovers(root);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return UpdaterResult.Fail(UpdaterExitCodes.ApplyFailed, $"cannot remove what an earlier update left in {root}: {ex.Message}", installed);
+        }
+
+        log.WriteLine($"Extracting {record.App} {staged.Version} into {root}");
+        try
+        {
+            ArchiveStaging.Extract(archive, root);
+        }
+        catch (InvalidArchiveException ex)
+        {
+            DeleteLeftoversQuietly(root);
+            return UpdaterResult.Fail(UpdaterExitCodes.VerificationFailed, $"{ex.Message}; nothing was changed and the download was removed", installed);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Discard(root, $"cannot extract the update: {ex.Message}; nothing was changed and the download was removed", installed);
+        }
+
+        UpdateInstallRecord stagedRecord;
+        try
+        {
+            stagedRecord = UpdateInstallRecord.Load(Path.Combine(root, UpdateInstallRecord.FileName + FileSwap.NewSuffix));
+        }
+        catch (UpdateException ex)
+        {
+            return Discard(root, $"the update archive holds no valid install record: {ex.Message}", installed);
+        }
+
+        if (stagedRecord.App != record.App || stagedRecord.Target != record.Target || stagedRecord.Strategy != record.Strategy
+            || stagedRecord.Version.CompareTo(staged.Version) != 0)
+        {
+            return Discard(
+                root,
+                $"the update archive holds {stagedRecord.App} {stagedRecord.Version} ({stagedRecord.Target}, {stagedRecord.Strategy}), not {record.App} {staged.Version} ({record.Target}, {record.Strategy})",
+                installed);
+        }
+
+        FileSwap swap;
+        try
+        {
+            swap = FileSwap.Plan(root);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Discard(root, ex.Message, installed);
+        }
+
+        try
+        {
+            swap.Apply(environment.Mover);
+        }
+        catch (SwapException ex) when (ex.RolledBack)
+        {
+            return Discard(root, $"the update failed and was rolled back: {ex.Message}", installed);
+        }
+        catch (SwapException ex)
+        {
+            return UpdaterResult.Fail(UpdaterExitCodes.RollbackFailed, $"the update failed and could not be rolled back; extract the new version again: {ex.Message}", installed);
+        }
+
+        foreach (var left in FileSwap.DeleteOld(root))
+        {
+            log.WriteLine($"{left} is in use; it is removed by the next update");
+        }
+
+        if (restart)
+        {
+            StartApplication(root, stagedRecord);
+        }
+
+        return Applied(record, staged);
+    }
+
+    /// <summary>
+    /// Returns why the updater cannot write into <paramref name="root"/> (a folder the user may not
+    /// change), or null when it can. Probed by creating and deleting a file.
+    /// </summary>
+    private static string? CheckWritable(string root)
+    {
+        var probe = Path.Combine(root, $".zexoro-write-check-{Guid.NewGuid():N}");
+        try
+        {
+            using (new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+            {
+            }
+
+            return null;
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return $"the folder {root} is not writable, so the update cannot be applied; move the application to a folder you can write to, or extract the new version yourself ({ex.Message})";
+        }
+        catch (IOException)
+        {
+            // Not a permission problem; extraction reports it if it persists.
+            return null;
+        }
     }
 
     /// <param name="movedUpdater">

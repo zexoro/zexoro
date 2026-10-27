@@ -2,7 +2,7 @@
 
 Package applications built with any technology into native installers, and keep them up to date.
 
-> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS) from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
+> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS) and portable Windows zip archives from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
 
 ## Install
 
@@ -35,7 +35,7 @@ On Windows, check the zip with `Get-FileHash zexoro-<version>-win-x64.zip -Algor
 zexoro init      # writes a commented zexoro.toml into the current directory
 # edit zexoro.toml: [app] identity, [input] your build output, [windows] options
 zexoro doctor    # checks the configuration, the files it names, the certificate and the bundled NSIS
-zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe
+zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe (and .zip with formats = ["nsis", "zip"])
 ```
 
 `zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. `--input <dir>` and `--main <path>` replace `input.dir` and `input.main` (relative to the current directory and to the input directory), so one configuration can serve a CI matrix of build outputs, and `--format <f>[,<f>...]` replaces the formats of the target platform's table. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
@@ -48,7 +48,7 @@ zexoro packages build output; it never builds your application. One `pack` run p
 | ELF, 64-bit little-endian, for x86-64 or AArch64 | `linux-x64`, `linux-arm64` |
 | Mach-O for x86_64 or arm64; a universal binary with both slices | `osx-x64`, `osx-arm64`; `osx-universal` |
 
-An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Only Windows `nsis` is implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
+An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
 
 ## Configuration
 
@@ -80,10 +80,10 @@ Used when the target is Windows; an absent table means the defaults.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `formats` | array of `"nsis"`, `"zip"`, `"msi"` | `["nsis"]` | The formats to build. Only `nsis` is implemented so far. |
-| `install_scope` | `"user"` \| `"machine"` | `"user"` | Per-user install without elevation, or per-machine install with elevation. |
-| `shortcuts` | array of `"start-menu"`, `"desktop"` | `["start-menu"]` | Shortcuts to create; `[]` for none. |
-| `license` | path | none | Text file shown on a license page; no page when absent. |
+| `formats` | array of `"nsis"`, `"zip"`, `"msi"` | `["nsis"]` | The formats to build: `nsis` an installer, `zip` a [portable archive](#the-portable-zip). `msi` is not implemented yet. |
+| `install_scope` | `"user"` \| `"machine"` | `"user"` | Per-user install without elevation, or per-machine install with elevation (`nsis` only; a zip is always per-user). |
+| `shortcuts` | array of `"start-menu"`, `"desktop"` | `["start-menu"]` | Shortcuts to create; `[]` for none (`nsis` only). |
+| `license` | path | none | Text file shown on a license page; no page when absent (`nsis` only). |
 | `sign` | `"main"` \| `"all"` | `"main"` | With signing configured: sign only the main executable, or every PE file (`.exe`, `.dll`) in `dir` that is not signed already. |
 
 ### `[windows.signing]` (optional)
@@ -113,12 +113,12 @@ Used when the target is Linux or macOS. No Linux or macOS format is implemented 
 
 ### `[updates]` (optional)
 
-Makes installers updatable: they then include `zexoro-updater.exe`, record where to look for updates, and `pack` writes a release fragment `<installer>.release.json` next to each installer for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, installers have no updater.
+Makes installers and zip archives updatable: they then include `zexoro-updater.exe`, record where to look for updates, and `pack` writes a release fragment `<package>.release.json` next to each package for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, packages have no updater.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `feed` | string | required | URL template of the feed. It must contain `{channel}`, so every channel has its own feed: `"https://example.com/updates/{channel}/feed.json"`. |
-| `download` | string | required | URL template of an installer: `{file}` (the installer's file name), `{version}` and `{channel}`, for example `"https://example.com/dl/{version}/{file}"`. |
+| `download` | string | required | URL template of a package: `{file}` (the installer's or archive's file name), `{version}` and `{channel}`, for example `"https://example.com/dl/{version}/{file}"`. |
 | `channel` | string | `"stable"` | The channel the installers follow: ASCII letters, digits, `.`, `-` and `_`. `pack --channel` overrides it. |
 | `keys` | array | required | The trusted public keys, at least one: the base64 text that `zexoro keys new` prints, or `{ file = "zexoro-update.pub" }`. Rotate keys by listing the new one next to the old one (a release signed with the old key ships the new list). |
 
@@ -135,7 +135,7 @@ keys     = [{ file = "zexoro-update.pub" }]
 
 ## Signing
 
-zexoro signs with Authenticode itself; `signtool` is not needed, so signing works on Linux and macOS too. With `[windows.signing]` configured, `pack` signs, in order, the application files chosen by `sign` (in a staging copy, never in your input directory), the uninstaller, and the installer.
+zexoro signs with Authenticode itself; `signtool` is not needed, so signing works on Linux and macOS too. With `[windows.signing]` configured, `pack` signs, in order, the application files chosen by `sign` (in a staging copy, never in your input directory), `zexoro-updater.exe`, the uninstaller, and the installer. A zip archive itself has no signature; the files in it are signed the same way.
 
 ```toml
 [windows.signing]
@@ -157,18 +157,31 @@ The password reaches zexoro only through the environment; it is never written to
 - **Stage mode (internal):** with `[updates]`, the updater runs a per-user installer as `/S /ZEXORO_STAGE`; it then writes the new version next to the install (`app.new\` and `.new` files) without touching the registry or shortcuts, and the updater swaps it in.
 - **Exit codes:** `0` success, `1` cancelled, `2` aborted (unsupported Windows, a per-machine install without administrator rights, or a refused stage mode), `3` a newer version is already installed, `4` the application is running or its files are in use.
 
+## The portable zip
+
+With `formats = ["zip"]` (or `pack --format zip`), `pack` writes `<name>-<version>-win-<arch>.zip`, which users extract wherever they like and run from there. Nothing is installed or registered: no Installed apps entry, no shortcuts, no elevation.
+
+```
+<name>\
+  app\                  your build output
+  zexoro-install.json   identity and update settings (format zip, scope user, strategy replace)
+  zexoro-updater.exe    with [updates] only
+```
+
+The archive is reproducible: entries are sorted, every timestamp is 1980-02-01 00:00 and no host-specific attributes are recorded, so the same files give the same bytes on Linux, macOS and Windows. With `[updates]`, the updater replaces `app\` and the root files with those of the next archive (below); the folder must be writable by the user, otherwise `apply` exits 7 and the user updates by extracting the new version. Without `[updates]` the archive has no updater and no release fragment, as for installers.
+
 ## Automatic updates
 
-Installers packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured) and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
+Installers and zip archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured) and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
 zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
-zexoro pack                         # installer + <installer>.release.json
+zexoro pack                         # installer or zip + <package>.release.json
 zexoro feed add --feed feed.json --key zexoro-update.key.pem dist/*.release.json
 zexoro feed verify --public-key zexoro-update.pub feed.json
 ```
 
-Upload the installers to the `download` URL first, then `feed.json` and `feed.json.sig` to the `feed` URL. `feed add` merges release fragments (packed on any number of hosts) into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text, for CI secrets); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one.
+Upload the packages to the `download` URL first, then `feed.json` and `feed.json.sig` to the `feed` URL. `feed add` merges release fragments (packed on any number of hosts) into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text, for CI secrets); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one.
 
 > **Keep the private key out of the repository and back it up.** Installed copies trust only the keys listed in `[updates] keys`; if every trusted private key is lost, they can no longer be updated automatically and users must reinstall by hand.
 
@@ -180,7 +193,7 @@ zexoro-updater download [--json]                       # downloads and verifies 
 zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 ```
 
-`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in; per-machine installs run the new installer, which asks for elevation. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed, `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json`.
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip install extracts the new archive next to itself, refusing absolute paths, `..` and links in it); per-machine installs run the new installer, which asks for elevation. One feed can carry the installer and the zip of a release: each install takes the artifact of its own format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json`.
 
 ## zexoro exit codes
 
@@ -192,7 +205,7 @@ zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 | --- | --- |
 | `ZEXORO_CACHE_DIR` | Where the bundled toolset is extracted. Default: `%LOCALAPPDATA%\zexoro`, `~/Library/Caches/zexoro` or `$XDG_CACHE_HOME/zexoro`. |
 | `ZEXORO_NSIS_DIR` | Use this NSIS directory instead of the bundled one (development). |
-| `ZEXORO_UPDATER_DIR` | A directory with `zexoro-updater-win-<arch>.exe` files to put into installers instead of the embedded ones (development). |
+| `ZEXORO_UPDATER_DIR` | A directory with `zexoro-updater-win-<arch>.exe` files to put into installers and zip archives instead of the embedded ones (development). |
 
 ## GitHub Actions
 
