@@ -93,6 +93,19 @@ public sealed class ZipApplyTests : IDisposable
     private FakeProcesses Processes => _install.Processes;
 
     [Fact]
+    public void DownloadThenApply_StagesTheArchiveUnderItsOwnName()
+    {
+        _install.Publish("2.0.0", installer: PackedArchive("2.0.0"));
+
+        Assert.Equal(UpdaterExitCodes.Success, _install.Run("download"));
+        Assert.True(File.Exists(Path.Combine(_install.State.Downloads, "Notes-2.0.0-win-x64.zip")));
+
+        Assert.Equal(UpdaterExitCodes.Success, _install.Run("apply"));
+        Assert.Equal("app 2.0.0", File.ReadAllText(Path.Combine(Root, "app", "Notes.exe")));
+        Assert.Equal(UpdaterExitCodes.UpToDate, _install.Run("check"));
+    }
+
+    [Fact]
     public void Apply_AcceptsAChangedMainExecutable()
     {
         _install.Stage("2.0.0", PackedArchive("2.0.0", main: "bin/Notes2.exe"));

@@ -135,12 +135,15 @@ public sealed class CheckTests : IDisposable
     }
 
     [Theory]
-    [InlineData("Notes-2.0.0-win-x64.exe", "Notes-2.0.0-win-x64.exe")]
-    [InlineData("setup.msi", "com.example.notes-2.0.0.exe")]
-    [InlineData("a%20b.exe", "com.example.notes-2.0.0.exe")]
-    [InlineData("", "com.example.notes-2.0.0.exe")]
-    public void FileNameFor_KeepsOnlyPlainExeNames(string file, string expected) =>
-        Assert.Equal(expected, UpdateCommands.FileNameFor(TestInstall.App, Versioning.SemanticVersion.Parse("2.0.0"), new Uri("https://example.com/dl/" + file)));
+    [InlineData("Notes-2.0.0-win-x64.exe", "nsis", "Notes-2.0.0-win-x64.exe")]
+    [InlineData("setup.msi", "nsis", "com.example.notes-2.0.0.exe")]
+    [InlineData("a%20b.exe", "nsis", "com.example.notes-2.0.0.exe")]
+    [InlineData("", "nsis", "com.example.notes-2.0.0.exe")]
+    [InlineData("Notes-2.0.0-win-x64.zip", "zip", "Notes-2.0.0-win-x64.zip")]
+    [InlineData("Notes-2.0.0-win-x64.exe", "zip", "com.example.notes-2.0.0.zip")]
+    [InlineData(".zip", "zip", "com.example.notes-2.0.0.zip")]
+    public void FileNameFor_KeepsOnlyPlainNamesWithTheFormatsExtension(string file, string format, string expected) =>
+        Assert.Equal(expected, UpdateCommands.FileNameFor(TestInstall.App, Versioning.SemanticVersion.Parse("2.0.0"), new Uri("https://example.com/dl/" + file), UpdateCommands.ExtensionFor(format)));
 }
 
 public sealed class CommandLineTests : IDisposable
