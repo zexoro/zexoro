@@ -5,9 +5,8 @@
 #   tests/e2e/unix/run-rpm-in-container.sh <image> <directory written by tests/e2e/pack.sh> [enforce]
 #
 # Installs what the test needs from the distribution (python3, gpg, findutils, libstdc++ for .NET;
-# rpmlint where the
-# distribution has it in its main repositories: Fedora). Needs docker and the repository as the
-# working directory.
+# rpmlint where the distribution has it in its main repositories: Fedora). Needs docker and the
+# repository as the working directory.
 set -euo pipefail
 
 if [ $# -lt 2 ]; then

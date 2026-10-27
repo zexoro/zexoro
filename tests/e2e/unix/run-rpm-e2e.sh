@@ -250,8 +250,9 @@ run_rpmlint() {
 
 # rpmlint errors accepted for zexoro's packages (docs/design/0006-desktop-formats.md, "As implemented
 # (step 7)"): third-party packages belong in /opt, which is the point of the layout; zexoro knows
-# nothing about the application's history, so it writes no changelog.
-accepted_rpmlint='^(dir-or-file-in-opt|no-changelogname-tag)$'
+# nothing about the application's history, so it writes no changelog; the e2e signing key is not
+# one rpmlint's keyring knows (unknown-key; the signature itself is checked below).
+accepted_rpmlint='^(dir-or-file-in-opt|no-changelogname-tag|unknown-key)$'
 
 # snapshot: everything the package installed, with modes, sizes, times and contents.
 snapshot() {
@@ -273,7 +274,8 @@ test_installed() { # <version>: the installed package and its files
   local version=$1 record=$root/zexoro-install.json
   check "rpm reports $pkg as installed" installed
   equal "$(rpm -q --qf '%{VERSION}' "$pkg")" "$version" "rpm reports version $version"
-  equal "$(command -v "$pkg")" "/usr/bin/$pkg" "$pkg is found on PATH in /usr/bin"
+  # Fedora 42 and later merged /usr/sbin into /usr/bin (a link) and put it first on root's PATH.
+  equal "$(cd "$(dirname "$(command -v "$pkg")")" && pwd -P)/$pkg" "/usr/bin/$pkg" "$pkg is found on PATH in /usr/bin"
   equal "$(readlink /usr/bin/$pkg)" "$root/app/FixtureApp" "/usr/bin/$pkg links to $root/app/FixtureApp"
   equal "$(cd "$root" && ls -A | sort | tr '\n' ' ' | sed 's/ $//')" "app zexoro-install.json zexoro-updater" "$root holds app/, the record and the updater, nothing else"
   equal "$(stat -c '%U %a' "$root/zexoro-updater")" "root 755" "zexoro-updater is owned by root with mode 755"
