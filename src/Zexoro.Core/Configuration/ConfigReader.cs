@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using Zexoro.Platforms;
 using Zexoro.Toml;
 using Zexoro.Versioning;
 
@@ -13,10 +14,12 @@ internal sealed class ConfigReader
     /// <summary>Folders that <c>[windows.uninstall] remove</c> entries must start with.</summary>
     internal static readonly string[] UninstallRoots = ["%LOCALAPPDATA%", "%APPDATA%", "%PROGRAMDATA%"];
 
-    private static readonly string[] RootKeys = ["app", "input", "windows", "updates"];
+    private static readonly string[] RootKeys = ["app", "input", "windows", "linux", "macos", "updates"];
     private static readonly string[] AppKeys = ["id", "name", "version", "publisher", "icon", "description", "url"];
-    private static readonly string[] InputKeys = ["dir", "main"];
-    private static readonly string[] WindowsKeys = ["install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
+    private static readonly string[] InputKeys = ["dir", "main", "target"];
+    private static readonly string[] LinuxKeys = ["formats"];
+    private static readonly string[] MacOSKeys = ["formats"];
+    private static readonly string[] WindowsKeys = ["formats", "install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
     private static readonly string[] UninstallKeys = ["remove"];
     private static readonly string[] UpdatesKeys = ["feed", "download", "channel", "keys"];
@@ -84,8 +87,24 @@ internal sealed class ConfigReader
             ParseOverrideVersion(version);
         }
 
-        var input = tables.RequiredTable("input", InputKeys) is { } inputTable ? ReadInput(inputTable) : null;
-        var windows = tables.OptionalTable("windows", WindowsKeys) is { } windowsTable ? ReadWindows(windowsTable) : null;
+        var input = tables.RequiredTable("input", InputKeys) is { } inputTable ? ReadInput(inputTable, overrides) : null;
+        var windows = tables.OptionalTable("windows", WindowsKeys) is { } windowsTable
+            ? ReadWindows(windowsTable)
+            : new WindowsConfig(
+                false,
+                PackageFormat.DefaultFor(OperatingSystemFamily.Windows),
+                WindowsInstallScope.User,
+                WindowsShortcuts.StartMenu,
+                null,
+                WindowsSignFiles.Main,
+                null,
+                new WindowsUninstallConfig([]));
+        var linux = tables.OptionalTable("linux", LinuxKeys) is { } linuxTable
+            ? ReadLinux(linuxTable)
+            : new LinuxConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux));
+        var macOS = tables.OptionalTable("macos", MacOSKeys) is { } macOSTable
+            ? ReadMacOS(macOSTable)
+            : new MacOSConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.MacOS));
         UpdatesConfig? updates = null;
         if (tables.OptionalTable("updates", UpdatesKeys) is { } updatesTable)
         {
@@ -100,7 +119,7 @@ internal sealed class ConfigReader
 
         return app is null || input is null || _errors.Count > 0
             ? null
-            : new ZexoroConfig(_source, _baseDirectory, app, input, windows, updates);
+            : new ZexoroConfig(_source, _baseDirectory, app, input, windows, linux, macOS, updates);
     }
 
     private AppConfig? ReadApp(TableReader table, ConfigOverrides? overrides)
@@ -171,37 +190,142 @@ internal sealed class ConfigReader
         return null;
     }
 
-    private InputConfig? ReadInput(TableReader table)
+    private InputConfig? ReadInput(TableReader table, ConfigOverrides? overrides)
     {
         var dir = table.RequiredPath("dir");
+        if (dir is not null && overrides?.InputDirectory is { } inputOverride)
+        {
+            dir = dir with { Value = inputOverride, FullPath = Path.GetFullPath(inputOverride) };
+        }
+
         ConfigPath? main = null;
         if (table.RequiredString("main") is { } mainNode)
         {
-            var normalized = mainNode.Value.Replace('\\', '/');
-            if (normalized.Length == 0 || normalized.EndsWith('/'))
+            var value = mainNode.Value;
+            if (overrides?.Main is { } mainOverride)
             {
-                Error(mainNode, "input.main must name a file inside input.dir");
+                value = mainOverride;
+                if (ValidateMain(mainOverride) is { } overrideProblem)
+                {
+                    _errors.Add(new ConfigError($"'{mainOverride}' {overrideProblem}", "--main", null));
+                    value = null;
+                }
             }
-            else if (normalized.StartsWith('/') || Path.IsPathRooted(normalized) || (normalized.Length >= 2 && normalized[1] == ':'))
+            else if (ValidateMain(value) is { } problem)
             {
-                Error(mainNode, "input.main must be a path relative to input.dir, not an absolute path");
+                Error(mainNode, $"input.main {problem}");
+                value = null;
             }
-            else if (normalized.Split('/').Any(segment => segment is ".." or "."))
+
+            if (value is not null && dir is not null)
             {
-                Error(mainNode, "input.main must not contain '.' or '..' segments");
-            }
-            else if (dir is not null)
-            {
+                var normalized = value.Replace('\\', '/');
                 main = new ConfigPath("input.main", normalized, ResolvePath(dir.FullPath, normalized), mainNode.Position);
             }
         }
 
+        TargetPlatform? target = null;
+        TomlPosition? targetPosition = null;
+        var targetValid = true;
+        if (table.OptionalString("target") is { } targetNode)
+        {
+            targetPosition = targetNode.Position;
+            var supported = PackagingTargets.All.Select(t => t.Rid).ToList();
+            if (TargetPlatform.TryParse(targetNode.Value, out var parsed) && PackagingTargets.IsSupported(parsed))
+            {
+                target = parsed;
+            }
+            else
+            {
+                Error(targetNode, $"input.target must be {Quote(supported)}, but is '{targetNode.Value}'{Suggest(targetNode.Value, supported)}");
+                targetValid = false;
+            }
+        }
+
         table.ReportUnknownKeys();
-        return dir is null || main is null ? null : new InputConfig(dir, main);
+        return dir is null || main is null || !targetValid ? null : new InputConfig(dir, main, target, targetPosition);
     }
 
-    private WindowsConfig? ReadWindows(TableReader table)
+    /// <summary>Checks an <c>input.main</c> value: a file path relative to <c>input.dir</c>, without <c>.</c> or <c>..</c>.</summary>
+    private static string? ValidateMain(string value)
     {
+        var normalized = value.Replace('\\', '/');
+        if (normalized.Length == 0 || normalized.EndsWith('/'))
+        {
+            return "must name a file inside input.dir";
+        }
+
+        if (normalized.StartsWith('/') || Path.IsPathRooted(normalized) || (normalized.Length >= 2 && normalized[1] == ':'))
+        {
+            return "must be a path relative to input.dir, not an absolute path";
+        }
+
+        return normalized.Split('/').Any(segment => segment is ".." or ".")
+            ? "must not contain '.' or '..' segments"
+            : null;
+    }
+
+    private IReadOnlyList<PackageFormat> ReadFormats(TableReader table, OperatingSystemFamily operatingSystem)
+    {
+        var name = $"{operatingSystem.Name}.formats";
+        if (table.OptionalArray("formats") is not { } array)
+        {
+            return PackageFormat.DefaultFor(operatingSystem);
+        }
+
+        if (array.Count == 0)
+        {
+            Error(array, $"{name} must list at least one format; omit it for the default ({string.Join(", ", PackageFormat.DefaultFor(operatingSystem).Select(f => f.Name))})");
+            return PackageFormat.DefaultFor(operatingSystem);
+        }
+
+        var allowed = PackageFormat.NamesFor(operatingSystem).ToArray();
+        var formats = new List<PackageFormat>();
+        for (var i = 0; i < array.Count; i++)
+        {
+            if (table.StringElement(array, i, name) is not { } element)
+            {
+                continue;
+            }
+
+            if (!PackageFormat.TryFind(operatingSystem, element.Value, out var format))
+            {
+                var elsewhere = PackageFormat.OperatingSystemsWith(element.Value);
+                var hint = elsewhere.Count > 0
+                    ? $"; '{element.Value}' is a {string.Join(" and ", elsewhere.Select(o => o.Name))} format, set it in [{elsewhere[0].Name}] formats"
+                    : Suggest(element.Value, allowed);
+                Error(element, $"{name}[{i}] must be {Quote(allowed)}, but is '{element.Value}'{hint}");
+            }
+            else if (formats.Contains(format))
+            {
+                Error(element, $"{name}: '{element.Value}' is listed twice");
+            }
+            else
+            {
+                formats.Add(format);
+            }
+        }
+
+        return formats;
+    }
+
+    private LinuxConfig ReadLinux(TableReader table)
+    {
+        var formats = ReadFormats(table, OperatingSystemFamily.Linux);
+        table.ReportUnknownKeys();
+        return new LinuxConfig(true, formats);
+    }
+
+    private MacOSConfig ReadMacOS(TableReader table)
+    {
+        var formats = ReadFormats(table, OperatingSystemFamily.MacOS);
+        table.ReportUnknownKeys();
+        return new MacOSConfig(true, formats);
+    }
+
+    private WindowsConfig ReadWindows(TableReader table)
+    {
+        var formats = ReadFormats(table, OperatingSystemFamily.Windows);
         var scope = table.OptionalEnum("install_scope", ["user", "machine"]) switch
         {
             "machine" => WindowsInstallScope.Machine,
@@ -281,7 +405,7 @@ internal sealed class ConfigReader
         }
 
         table.ReportUnknownKeys();
-        return new WindowsConfig(scope, shortcuts, license, sign, signing, new WindowsUninstallConfig(remove));
+        return new WindowsConfig(true, formats, scope, shortcuts, license, sign, signing, new WindowsUninstallConfig(remove));
     }
 
     private UpdatesConfig? ReadUpdates(TableReader table, ConfigOverrides? overrides)

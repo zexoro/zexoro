@@ -1,7 +1,7 @@
 using Zexoro.Platforms;
 using Zexoro.Signing.Fixtures;
 
-namespace Zexoro.Formats.Nsis.Tests;
+namespace Zexoro.Core.Tests;
 
 public sealed class PeMachineTests : IDisposable
 {

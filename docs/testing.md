@@ -8,6 +8,8 @@ dotnet test
 
 They run on Linux, macOS and Windows in CI (`.github/workflows/ci.yml`, job `build`).
 
+Target detection (`ExecutableInspectorTests`) runs on small synthetic headers: PE images from `tests/Zexoro.Signing.Fixtures/Shared/TestPe.cs`, and hand-built ELF, thin Mach-O and fat Mach-O headers, including unsupported machines, wrong ELF class or byte order, and a Java class file (which shares the fat magic). `TargetConfigTests` and `PackCommandTests` cover `formats`, `[input] target`, `pack --format/--input/--main` and the "not implemented yet" refusal for every format except `nsis`.
+
 ## End-to-end tests
 
 The end-to-end tests (docs/design/0003-mvp.md section 5) install real installers on Windows. They have two halves:

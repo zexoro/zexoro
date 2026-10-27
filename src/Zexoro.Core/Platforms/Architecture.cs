@@ -6,7 +6,7 @@ namespace Zexoro.Platforms;
 
 /// <summary>
 /// A processor architecture that zexoro can target, named as in .NET runtime identifiers
-/// (<c>x64</c>, <c>x86</c>, <c>arm64</c>, <c>arm</c>).
+/// (<c>x64</c>, <c>x86</c>, <c>arm64</c>, <c>arm</c>), plus <c>universal</c> for macOS fat binaries.
 /// </summary>
 /// <remarks>The set is open: a new architecture is one more static instance.</remarks>
 public readonly struct Architecture : IEquatable<Architecture>
@@ -23,8 +23,14 @@ public readonly struct Architecture : IEquatable<Architecture>
 
     public static Architecture Arm { get; } = new("arm");
 
+    /// <summary>
+    /// A macOS universal (fat) binary with x64 and arm64 slices. It is not a .NET runtime
+    /// identifier architecture; zexoro uses it for <c>osx-universal</c> targets.
+    /// </summary>
+    public static Architecture Universal { get; } = new("universal");
+
     /// <summary>Every known architecture, in a stable order.</summary>
-    public static IReadOnlyList<Architecture> All { get; } = [X64, X86, Arm64, Arm];
+    public static IReadOnlyList<Architecture> All { get; } = [X64, X86, Arm64, Arm, Universal];
 
     /// <summary>The runtime identifier name, e.g. <c>x64</c>.</summary>
     public string Name => _name ?? string.Empty;

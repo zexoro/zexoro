@@ -1,3 +1,4 @@
+using Zexoro.Platforms;
 using Zexoro.Toml;
 using Zexoro.Versioning;
 
@@ -5,15 +6,24 @@ namespace Zexoro.Configuration;
 
 /// <summary>
 /// A validated <c>zexoro.toml</c>. Each top-level table maps to one property; platform tables
-/// (<c>[windows]</c> today) are optional, and new platforms, formats or update settings are added
-/// as further tables without changing the existing ones.
+/// (<c>[windows]</c>, <c>[linux]</c>, <c>[macos]</c>) are optional and take their defaults when
+/// absent, and new platforms, formats or update settings are added as further tables without
+/// changing the existing ones.
 /// </summary>
 public sealed class ZexoroConfig
 {
     /// <summary>The configuration file name that <c>zexoro init</c> writes and the CLI looks for.</summary>
     public const string DefaultFileName = "zexoro.toml";
 
-    internal ZexoroConfig(string source, string baseDirectory, AppConfig app, InputConfig input, WindowsConfig? windows, UpdatesConfig? updates)
+    internal ZexoroConfig(
+        string source,
+        string baseDirectory,
+        AppConfig app,
+        InputConfig input,
+        WindowsConfig windows,
+        LinuxConfig linux,
+        MacOSConfig macOS,
+        UpdatesConfig? updates)
     {
         Updates = updates;
         Source = source;
@@ -21,6 +31,8 @@ public sealed class ZexoroConfig
         App = app;
         Input = input;
         Windows = windows;
+        Linux = linux;
+        MacOS = macOS;
     }
 
     /// <summary>The configuration file path as given, used in messages.</summary>
@@ -35,8 +47,83 @@ public sealed class ZexoroConfig
     /// <summary><c>[input]</c>: the build output to package.</summary>
     public InputConfig Input { get; }
 
-    /// <summary><c>[windows]</c>, or null when the table is absent (no Windows target configured).</summary>
-    public WindowsConfig? Windows { get; }
+    /// <summary><c>[windows]</c>; the defaults when the table is absent (see <see cref="PlatformConfig.IsConfigured"/>).</summary>
+    public WindowsConfig Windows { get; }
+
+    /// <summary><c>[linux]</c>; the defaults when the table is absent.</summary>
+    public LinuxConfig Linux { get; }
+
+    /// <summary><c>[macos]</c>; the defaults when the table is absent.</summary>
+    public MacOSConfig MacOS { get; }
+
+    /// <summary>The platform table of <paramref name="operatingSystem"/>, or null for one zexoro does not package for.</summary>
+    public PlatformConfig? Platform(OperatingSystemFamily operatingSystem)
+    {
+        if (operatingSystem == OperatingSystemFamily.Windows)
+        {
+            return Windows;
+        }
+
+        if (operatingSystem == OperatingSystemFamily.Linux)
+        {
+            return Linux;
+        }
+
+        return operatingSystem == OperatingSystemFamily.MacOS ? MacOS : null;
+    }
+
+    /// <summary>
+    /// Determines the target platform of this build output: <c>[input] target</c> when set, otherwise
+    /// the platform of the main executable's header (docs/design/0006-desktop-formats.md section 4).
+    /// </summary>
+    /// <exception cref="ConfigurationException">
+    /// The input directory or main file does not exist, the main file is not a supported executable
+    /// and no target is set, or the set target contradicts the main executable.
+    /// </exception>
+    public PackTarget ResolveTarget()
+    {
+        var input = Input;
+        if (!Directory.Exists(input.Directory.FullPath))
+        {
+            throw Error(input.Directory, $"{input.Directory.Key}: directory {input.Directory.FullPath} not found; build your application first");
+        }
+
+        if (!File.Exists(input.Main.FullPath))
+        {
+            throw Error(input.Main, $"{input.Main.Key}: {input.Main.FullPath} not found");
+        }
+
+        ExecutableInfo executable;
+        try
+        {
+            executable = ExecutableInspector.Inspect(input.Main.FullPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw Error(input.Main, $"{input.Main.Key}: cannot read {input.Main.FullPath}: {ex.Message}");
+        }
+
+        if (input.Target is { } target)
+        {
+            if (executable.Target is { } detected && detected != target)
+            {
+                throw new ConfigurationException([new ConfigError(
+                    $"input.target: '{target}' does not match {input.Main.Key}, which is {executable.Description} ({detected})",
+                    Source,
+                    input.TargetPosition)]);
+            }
+
+            return new PackTarget(target, "input.target");
+        }
+
+        return executable.Target is { } found
+            ? new PackTarget(found, $"{input.Main.Key}: {executable.Description}")
+            : throw Error(input.Main, $"{input.Main.Key}: {input.Main.FullPath} is {executable.Description}, so the target platform is unknown; "
+                + $"zexoro packages {string.Join(", ", PackagingTargets.All)}. Set [input] target for an entry point that is not a native executable, such as a script");
+    }
+
+    private ConfigurationException Error(ConfigPath path, string message) =>
+        new([new ConfigError(message, Source, path.Position)]);
 
     /// <summary><c>[updates]</c>, or null when the table is absent (installers without an updater).</summary>
     public UpdatesConfig? Updates { get; }
@@ -133,13 +220,20 @@ public sealed class AppConfig
     public Uri? Url { get; }
 }
 
+/// <summary>The target platform of a build output and where it came from.</summary>
+/// <param name="Platform">The target platform.</param>
+/// <param name="Origin">How it was determined, for messages: <c>input.target</c>, or <c>input.main: &lt;what the header says&gt;</c>.</param>
+public sealed record PackTarget(TargetPlatform Platform, string Origin);
+
 /// <summary><c>[input]</c>: the already-built application directory.</summary>
 public sealed class InputConfig
 {
-    internal InputConfig(ConfigPath directory, ConfigPath main)
+    internal InputConfig(ConfigPath directory, ConfigPath main, TargetPlatform? target, TomlPosition? targetPosition)
     {
         Directory = directory;
         Main = main;
+        Target = target;
+        TargetPosition = targetPosition;
     }
 
     /// <summary>The build output directory.</summary>
@@ -150,6 +244,35 @@ public sealed class InputConfig
     /// written, with forward slashes); <see cref="ConfigPath.FullPath"/> is absolute.
     /// </summary>
     public ConfigPath Main { get; }
+
+    /// <summary>
+    /// <c>target</c>: the target platform when the main file is not a native executable (a
+    /// script), or null to read it from the main executable.
+    /// </summary>
+    public TargetPlatform? Target { get; }
+
+    /// <summary>Where <see cref="Target"/> is written, or null when it is not set.</summary>
+    public TomlPosition? TargetPosition { get; }
+}
+
+/// <summary>What every platform table (<c>[windows]</c>, <c>[linux]</c>, <c>[macos]</c>) has.</summary>
+public abstract class PlatformConfig
+{
+    private protected PlatformConfig(OperatingSystemFamily operatingSystem, bool isConfigured, IReadOnlyList<PackageFormat> formats)
+    {
+        OperatingSystem = operatingSystem;
+        IsConfigured = isConfigured;
+        Formats = formats;
+    }
+
+    /// <summary>The operating system the table configures.</summary>
+    public OperatingSystemFamily OperatingSystem { get; }
+
+    /// <summary>Whether the table is written in the file; when not, every value is its default.</summary>
+    public bool IsConfigured { get; }
+
+    /// <summary><c>formats</c>: the formats to build for this operating system, in order, without duplicates.</summary>
+    public IReadOnlyList<PackageFormat> Formats { get; }
 }
 
 /// <summary>Who a Windows install is for.</summary>
@@ -182,15 +305,18 @@ public enum WindowsSignFiles
 }
 
 /// <summary><c>[windows]</c>: Windows installer settings.</summary>
-public sealed class WindowsConfig
+public sealed class WindowsConfig : PlatformConfig
 {
     internal WindowsConfig(
+        bool isConfigured,
+        IReadOnlyList<PackageFormat> formats,
         WindowsInstallScope installScope,
         WindowsShortcuts shortcuts,
         ConfigPath? license,
         WindowsSignFiles sign,
         WindowsSigningConfig? signing,
         WindowsUninstallConfig uninstall)
+        : base(OperatingSystemFamily.Windows, isConfigured, formats)
     {
         InstallScope = installScope;
         Shortcuts = shortcuts;
@@ -217,6 +343,24 @@ public sealed class WindowsConfig
 
     /// <summary><c>[windows.uninstall]</c>; empty when absent.</summary>
     public WindowsUninstallConfig Uninstall { get; }
+}
+
+/// <summary><c>[linux]</c>: Linux package settings.</summary>
+public sealed class LinuxConfig : PlatformConfig
+{
+    internal LinuxConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats)
+        : base(OperatingSystemFamily.Linux, isConfigured, formats)
+    {
+    }
+}
+
+/// <summary><c>[macos]</c>: macOS package settings.</summary>
+public sealed class MacOSConfig : PlatformConfig
+{
+    internal MacOSConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats)
+        : base(OperatingSystemFamily.MacOS, isConfigured, formats)
+    {
+    }
 }
 
 /// <summary><c>[windows.signing]</c>: the Authenticode certificate.</summary>

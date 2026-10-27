@@ -38,9 +38,17 @@ zexoro doctor    # checks the configuration, the files it names, the certificate
 zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe
 ```
 
-`zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
+`zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. `--input <dir>` and `--main <path>` replace `input.dir` and `input.main` (relative to the current directory and to the input directory), so one configuration can serve a CI matrix of build outputs, and `--format <f>[,<f>...]` replaces the formats of the target platform's table. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
 
-zexoro packages build output; it never builds your application. The input directory must contain the main executable, an `.exe` for x86, x64 or arm64 Windows; the installer's architecture comes from its PE header.
+zexoro packages build output; it never builds your application. One `pack` run packages one build output for one target platform, which zexoro reads from the main executable's header:
+
+| Main executable | Target |
+| --- | --- |
+| PE (`.exe`) for x86, x64 or arm64 | `win-x86`, `win-x64`, `win-arm64` |
+| ELF, 64-bit little-endian, for x86-64 or AArch64 | `linux-x64`, `linux-arm64` |
+| Mach-O for x86_64 or arm64; a universal binary with both slices | `osx-x64`, `osx-arm64`; `osx-universal` |
+
+An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Only Windows `nsis` is implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
 
 ## Configuration
 
@@ -64,11 +72,15 @@ zexoro packages build output; it never builds your application. The input direct
 | --- | --- | --- | --- |
 | `dir` | path | required | The build output directory to install. |
 | `main` | string | required | The main executable, relative to `dir` (no absolute paths, `.` or `..`). Shortcuts point to it. |
+| `target` | string | from `main` | The target platform when `main` is not a native executable: `win-x86`, `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64` or `osx-universal`. When `main` is a native executable, `target` must match it. |
 
-### `[windows]` (optional; required by `pack`)
+### `[windows]` (optional)
+
+Used when the target is Windows; an absent table means the defaults.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `formats` | array of `"nsis"`, `"zip"`, `"msi"` | `["nsis"]` | The formats to build. Only `nsis` is implemented so far. |
 | `install_scope` | `"user"` \| `"machine"` | `"user"` | Per-user install without elevation, or per-machine install with elevation. |
 | `shortcuts` | array of `"start-menu"`, `"desktop"` | `["start-menu"]` | Shortcuts to create; `[]` for none. |
 | `license` | path | none | Text file shown on a license page; no page when absent. |
@@ -89,6 +101,15 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `remove` | array of strings | `[]` | Extra paths the uninstaller deletes, such as user data. Each starts with `%LOCALAPPDATA%`, `%APPDATA%` or `%PROGRAMDATA%` followed by a sub-path, for example `'%LOCALAPPDATA%\Example Notes'`. |
+
+### `[linux]` and `[macos]` (optional)
+
+Used when the target is Linux or macOS. No Linux or macOS format is implemented yet; the tables exist so that configurations can name their formats already.
+
+| Table | Key | Type | Default |
+| --- | --- | --- | --- |
+| `[linux]` | `formats` | array of `"tar.gz"`, `"appimage"`, `"deb"`, `"rpm"`, `"apk"` | `["tar.gz"]` |
+| `[macos]` | `formats` | array of `"zip"`, `"dmg"`, `"pkg"` | `["zip"]` |
 
 ### `[updates]` (optional)
 

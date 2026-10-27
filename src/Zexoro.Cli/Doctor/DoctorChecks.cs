@@ -1,8 +1,10 @@
 using System.Globalization;
 using System.Security.Cryptography.X509Certificates;
+using Zexoro.Cli.Packaging;
 using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
 using Zexoro.Formats.Nsis;
+using Zexoro.Platforms;
 using Zexoro.Signing;
 using Zexoro.Toolsets;
 
@@ -11,7 +13,57 @@ namespace Zexoro.Cli.Doctor;
 /// <summary>A check that runs once the configuration has loaded.</summary>
 internal interface IDoctorCheck
 {
-    void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report);
+    void Run(DoctorContext context, DoctorReport report);
+}
+
+/// <summary>
+/// What the checks look at: the configuration, and the platforms and formats that <c>pack</c>
+/// would build. When the target platform cannot be determined yet (the main executable does not
+/// exist), every platform whose table is written in the configuration counts.
+/// </summary>
+internal sealed class DoctorContext
+{
+    public DoctorContext(ZexoroConfig config, CliEnvironment environment)
+    {
+        Config = config;
+        Environment = environment;
+        if (Directory.Exists(config.Input.Directory.FullPath) && File.Exists(config.Input.Main.FullPath))
+        {
+            try
+            {
+                Target = config.ResolveTarget();
+            }
+            catch (ConfigurationException ex)
+            {
+                TargetErrors = ex.Errors.Select(e => e.ToString()).ToList();
+            }
+        }
+
+        Platforms = Target is { } target
+            ? [config.Platform(target.Platform.OperatingSystem)!]
+            : PackagingTargets.All.Select(t => t.OperatingSystem).Distinct()
+                .Select(os => config.Platform(os)!).Where(p => p.IsConfigured).ToList();
+        Formats = Platforms.SelectMany(p => p.Formats).ToList();
+    }
+
+    public ZexoroConfig Config { get; }
+
+    public CliEnvironment Environment { get; }
+
+    /// <summary>The target platform, or null when it cannot be determined.</summary>
+    public PackTarget? Target { get; }
+
+    /// <summary>Why the target platform cannot be determined although the main file exists; empty otherwise.</summary>
+    public IReadOnlyList<string> TargetErrors { get; } = [];
+
+    /// <summary>The platform tables that apply.</summary>
+    public IReadOnlyList<PlatformConfig> Platforms { get; }
+
+    /// <summary>The formats of <see cref="Platforms"/>, as configured (<c>pack --format</c> may choose others).</summary>
+    public IReadOnlyList<PackageFormat> Formats { get; }
+
+    /// <summary>Whether packages for <paramref name="operatingSystem"/> would be built.</summary>
+    public bool Targets(OperatingSystemFamily operatingSystem) => Platforms.Any(p => p.OperatingSystem == operatingSystem);
 }
 
 /// <summary>The checks <c>zexoro doctor</c> runs, in order.</summary>
@@ -23,8 +75,8 @@ internal static class DoctorChecks
     /// </summary>
     public static readonly IReadOnlyList<IDoctorCheck> All =
     [
-        new TargetsCheck(),
         new InputCheck(),
+        new TargetsCheck(),
         new IconCheck(),
         new WindowsLicenseCheck(),
         new WindowsSigningCheck(),
@@ -57,9 +109,10 @@ internal static class DoctorChecks
         }
 
         report.Ok($"{displayPath}: configuration is valid ({config.App.Id} {config.App.Version})");
+        var context = new DoctorContext(config, environment);
         foreach (var check in All)
         {
-            check.Run(config, environment, report);
+            check.Run(context, report);
         }
     }
 
@@ -72,14 +125,36 @@ internal static class DoctorChecks
         $"{value.Source}:{value.Position.Line}:{value.Position.Column}: {value.Key}: {message}";
 }
 
-/// <summary>Reports which platforms the configuration targets.</summary>
+/// <summary>Reports the target platform and the formats <c>pack</c> builds for it.</summary>
 internal sealed class TargetsCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
-        if (config.Windows is null)
+        foreach (var error in context.TargetErrors)
         {
-            report.Warning("no target platform is configured; add a [windows] table to build a Windows installer");
+            report.Error(error);
+        }
+
+        if (context.Target is not { } target)
+        {
+            if (context.TargetErrors.Count == 0 && context.Platforms.Count == 0)
+            {
+                report.Warning("the target platform is unknown until input.main exists, and no platform table ([windows], [linux] or [macos]) is configured");
+            }
+
+            return;
+        }
+
+        var errors = new List<string>();
+        var formats = FormatSelection.Select(context.Config, target, null, errors);
+        foreach (var error in errors)
+        {
+            report.Error(error);
+        }
+
+        if (formats is not null)
+        {
+            report.Ok($"target {target.Platform} ({target.Origin}); formats: {string.Join(", ", formats.Select(f => f.Name))}");
         }
     }
 }
@@ -87,8 +162,9 @@ internal sealed class TargetsCheck : IDoctorCheck
 /// <summary>The input directory and main executable exist.</summary>
 internal sealed class InputCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
+        var config = context.Config;
         var dir = config.Input.Directory;
         if (!Directory.Exists(dir.FullPath))
         {
@@ -106,7 +182,7 @@ internal sealed class InputCheck : IDoctorCheck
         }
 
         report.Ok($"input.main: {main.FullPath}");
-        if (config.Windows is not null && !main.Value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+        if (context.Targets(OperatingSystemFamily.Windows) && !main.Value.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
         {
             report.Warning(DoctorChecks.About(main, config, "Windows installers expect an .exe entry point"));
         }
@@ -116,8 +192,9 @@ internal sealed class InputCheck : IDoctorCheck
 /// <summary>The application icon exists and, for Windows, is an ICO file.</summary>
 internal sealed class IconCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
+        var config = context.Config;
         var icon = config.App.Icon;
         if (!File.Exists(icon.FullPath))
         {
@@ -125,7 +202,7 @@ internal sealed class IconCheck : IDoctorCheck
             return;
         }
 
-        if (config.Windows is not null && !IsIco(icon.FullPath))
+        if (context.Targets(OperatingSystemFamily.Windows) && !IsIco(icon.FullPath))
         {
             report.Error(DoctorChecks.About(icon, config, $"'{icon.Value}' is not an .ico file, which Windows installers need"));
             return;
@@ -156,9 +233,10 @@ internal sealed class IconCheck : IDoctorCheck
 /// <summary>The license file exists, if one is configured.</summary>
 internal sealed class WindowsLicenseCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
-        if (config.Windows?.License is not { } license)
+        var config = context.Config;
+        if (!context.Targets(OperatingSystemFamily.Windows) || config.Windows.License is not { } license)
         {
             return;
         }
@@ -179,9 +257,11 @@ internal sealed class WindowsSigningCheck : IDoctorCheck
 {
     private const string CodeSigningEku = "1.3.6.1.5.5.7.3.3";
 
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
-        if (config.Windows is null)
+        var config = context.Config;
+        var environment = context.Environment;
+        if (!context.Targets(OperatingSystemFamily.Windows))
         {
             return;
         }
@@ -299,9 +379,10 @@ internal sealed class WindowsSigningCheck : IDoctorCheck
 /// <summary>The NSIS toolset extracts, matches its pinned hash and runs.</summary>
 internal sealed class NsisToolsetCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
-        if (config.Windows is null)
+        var environment = context.Environment;
+        if (!context.Formats.Contains(PackageFormat.Nsis))
         {
             return;
         }
@@ -322,9 +403,11 @@ internal sealed class NsisToolsetCheck : IDoctorCheck
 /// <summary>An updater is available for every Windows architecture (embedded or from ZEXORO_UPDATER_DIR).</summary>
 internal sealed class UpdaterCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
-        if (config.Windows is null)
+        var config = context.Config;
+        var environment = context.Environment;
+        if (!context.Targets(OperatingSystemFamily.Windows))
         {
             return;
         }
@@ -364,8 +447,9 @@ internal sealed class UpdaterCheck : IDoctorCheck
 /// <summary><c>[updates]</c>: the key files load; reports the feed URL and channel.</summary>
 internal sealed class UpdatesCheck : IDoctorCheck
 {
-    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    public void Run(DoctorContext context, DoctorReport report)
     {
+        var config = context.Config;
         if (config.Updates is not { } updates)
         {
             return;

@@ -8,4 +8,13 @@ public sealed record ConfigOverrides
 
     /// <summary>Replaces <c>updates.channel</c> (<c>--channel</c>). It needs an <c>[updates]</c> table.</summary>
     public string? Channel { get; init; }
+
+    /// <summary>
+    /// Replaces <c>input.dir</c> (<c>--input</c>). Relative paths are resolved against the current
+    /// directory; callers with another working directory pass an absolute path.
+    /// </summary>
+    public string? InputDirectory { get; init; }
+
+    /// <summary>Replaces <c>input.main</c> (<c>--main</c>), relative to the input directory.</summary>
+    public string? Main { get; init; }
 }
