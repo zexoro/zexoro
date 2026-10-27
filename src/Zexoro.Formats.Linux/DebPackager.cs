@@ -96,13 +96,14 @@ public static class DebPackager
 
     /// <summary>
     /// The package file name in Debian's convention, <c>&lt;pkg&gt;_&lt;version&gt;_&lt;arch&gt;.deb</c>,
-    /// for example <c>notes_1.2.3~beta.1_amd64.deb</c>.
+    /// with <c>~</c> written as <c>.</c> (<see cref="PackageFileVersion"/>), for example
+    /// <c>notes_1.2.3.beta.1_amd64.deb</c> for version <c>1.2.3~beta.1</c>.
     /// </summary>
     /// <exception cref="LinuxPackException">The version cannot be a Debian version.</exception>
     public static string GetOutputFileName(ZexoroConfig config, Architecture architecture)
     {
         ArgumentNullException.ThrowIfNull(config);
-        return $"{config.Linux.PackageName(config.App)}_{Version(config)}_{DebArchitecture(architecture)}{Extension}";
+        return $"{config.Linux.PackageName(config.App)}_{PackageFileVersion.From(Version(config))}_{DebArchitecture(architecture)}{Extension}";
     }
 
     /// <summary>Builds the package.</summary>

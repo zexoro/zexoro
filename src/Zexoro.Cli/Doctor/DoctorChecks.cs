@@ -81,6 +81,7 @@ internal static class DoctorChecks
         new IconCheck(),
         new WindowsLicenseCheck(),
         new WindowsSigningCheck(),
+        new RpmSigningCheck(),
         new NsisToolsetCheck(),
         new UpdaterCheck(),
         new UpdatesCheck(),
@@ -268,6 +269,44 @@ internal sealed class WindowsLicenseCheck : IDoctorCheck
         else
         {
             report.Error(DoctorChecks.About(license, config, $"'{license.Value}' not found"));
+        }
+    }
+}
+
+/// <summary>When rpm is built: the OpenPGP key of <c>[linux.rpm.signing]</c> loads with its password and is valid now.</summary>
+internal sealed class RpmSigningCheck : IDoctorCheck
+{
+    public void Run(DoctorContext context, DoctorReport report)
+    {
+        if (!context.Formats.Contains(PackageFormat.Rpm))
+        {
+            return;
+        }
+
+        if (context.Config.Linux.Rpm.Signing is not { } signing)
+        {
+            report.Warning("[linux.rpm.signing] is not configured; rpm packages will be unsigned");
+            return;
+        }
+
+        try
+        {
+            var environment = context.Environment;
+            using var key = OpenPgpSigningKey.Load(signing.ResolveKey(environment.GetVariable), signing.ResolvePassword(environment.GetVariable));
+            key.CheckValidAt(Packaging.LinuxRpmFormatPackager.SignatureTime(environment));
+            var expires = key.ExpirationTime is { } time ? $"expires {time.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}" : "does not expire";
+            report.Ok($"rpm signing key loads: {key.Description}, {expires}");
+        }
+        catch (ConfigurationException ex)
+        {
+            foreach (var error in ex.Errors)
+            {
+                report.Error(error.ToString());
+            }
+        }
+        catch (Exception ex) when (ex is SigningException or Packaging.PackException)
+        {
+            report.Error(DoctorChecks.About(signing.Key, ex.Message));
         }
     }
 }

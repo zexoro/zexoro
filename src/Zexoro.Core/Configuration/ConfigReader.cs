@@ -17,8 +17,10 @@ internal sealed class ConfigReader
     private static readonly string[] RootKeys = ["app", "input", "windows", "linux", "macos", "updates"];
     private static readonly string[] AppKeys = ["id", "name", "version", "publisher", "icon", "description", "url"];
     private static readonly string[] InputKeys = ["dir", "main", "target"];
-    private static readonly string[] LinuxKeys = ["formats", "package", "icon", "categories", "maintainer", "deb"];
+    private static readonly string[] LinuxKeys = ["formats", "package", "icon", "categories", "maintainer", "deb", "rpm"];
     private static readonly string[] LinuxDebKeys = ["depends"];
+    private static readonly string[] LinuxRpmKeys = ["requires", "license", "signing"];
+    private static readonly string[] RpmSigningKeys = ["key", "password"];
     private static readonly string[] MacOSKeys = ["formats"];
     private static readonly string[] WindowsKeys = ["formats", "install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
@@ -102,7 +104,8 @@ internal sealed class ConfigReader
                 new WindowsUninstallConfig([]));
         var linux = tables.OptionalTable("linux", LinuxKeys) is { } linuxTable
             ? ReadLinux(linuxTable)
-            : new LinuxConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux), null, null, [], null, new LinuxDebConfig([]));
+            : new LinuxConfig(
+                false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux), null, null, [], null, new LinuxDebConfig([]), new LinuxRpmConfig([], null, null));
         var macOS = tables.OptionalTable("macos", MacOSKeys) is { } macOSTable
             ? ReadMacOS(macOSTable)
             : new MacOSConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.MacOS));
@@ -368,31 +371,77 @@ internal sealed class ConfigReader
         var depends = new List<string>();
         if (table.OptionalTable("deb", LinuxDebKeys) is { } debTable)
         {
-            if (debTable.OptionalArray("depends") is { } dependsArray)
-            {
-                for (var i = 0; i < dependsArray.Count; i++)
-                {
-                    if (debTable.StringElement(dependsArray, i, "linux.deb.depends") is not { } relation)
-                    {
-                        continue;
-                    }
-
-                    if (string.IsNullOrWhiteSpace(relation.Value) || relation.Value.Any(char.IsControl))
-                    {
-                        Error(relation, $"linux.deb.depends[{i}] must be one line of text, such as 'libicu74 | libicu72'");
-                    }
-                    else
-                    {
-                        depends.Add(relation.Value.Trim());
-                    }
-                }
-            }
-
+            depends = ReadLines(debTable, "depends", "linux.deb.depends", "libicu74 | libicu72");
             debTable.ReportUnknownKeys();
         }
 
+        var rpm = new LinuxRpmConfig([], null, null);
+        if (table.OptionalTable("rpm", LinuxRpmKeys) is { } rpmTable)
+        {
+            rpm = ReadLinuxRpm(rpmTable);
+        }
+
         table.ReportUnknownKeys();
-        return new LinuxConfig(true, formats, package, icon, categories, maintainer, new LinuxDebConfig(depends));
+        return new LinuxConfig(true, formats, package, icon, categories, maintainer, new LinuxDebConfig(depends), rpm);
+    }
+
+    /// <summary>An optional array of one-line strings, trimmed.</summary>
+    private List<string> ReadLines(TableReader table, string key, string name, string example)
+    {
+        var lines = new List<string>();
+        if (table.OptionalArray(key) is { } array)
+        {
+            for (var i = 0; i < array.Count; i++)
+            {
+                if (table.StringElement(array, i, name) is not { } line)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(line.Value) || line.Value.Any(char.IsControl))
+                {
+                    Error(line, $"{name}[{i}] must be one line of text, such as '{example}'");
+                }
+                else
+                {
+                    lines.Add(line.Value.Trim());
+                }
+            }
+        }
+
+        return lines;
+    }
+
+    private LinuxRpmConfig ReadLinuxRpm(TableReader table)
+    {
+        var requires = ReadLines(table, "requires", "linux.rpm.requires", "libicu >= 60");
+        string? license = null;
+        if (table.OptionalString("license") is { } licenseNode)
+        {
+            if (string.IsNullOrWhiteSpace(licenseNode.Value) || licenseNode.Value.Any(char.IsControl))
+            {
+                Error(licenseNode, "linux.rpm.license must be one line of text, such as 'MIT' or 'LicenseRef-Proprietary'");
+            }
+            else
+            {
+                license = licenseNode.Value.Trim();
+            }
+        }
+
+        RpmSigningConfig? signing = null;
+        if (table.OptionalTable("signing", RpmSigningKeys) is { } signingTable)
+        {
+            var key = signingTable.RequiredValue("key");
+            var password = signingTable.OptionalValue("password");
+            signingTable.ReportUnknownKeys();
+            if (key is not null)
+            {
+                signing = new RpmSigningConfig(_baseDirectory, key, password);
+            }
+        }
+
+        table.ReportUnknownKeys();
+        return new LinuxRpmConfig(requires, license, signing);
     }
 
     /// <summary>A category of the Desktop Menu Specification: registered names and <c>X-</c> extensions are made of these characters.</summary>

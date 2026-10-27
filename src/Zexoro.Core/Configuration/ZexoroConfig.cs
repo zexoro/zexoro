@@ -349,9 +349,17 @@ public sealed class WindowsConfig : PlatformConfig
 public sealed class LinuxConfig : PlatformConfig
 {
     internal LinuxConfig(
-        bool isConfigured, IReadOnlyList<PackageFormat> formats, string? package, ConfigPath? icon, IReadOnlyList<string> categories, string? maintainer, LinuxDebConfig deb)
+        bool isConfigured,
+        IReadOnlyList<PackageFormat> formats,
+        string? package,
+        ConfigPath? icon,
+        IReadOnlyList<string> categories,
+        string? maintainer,
+        LinuxDebConfig deb,
+        LinuxRpmConfig rpm)
         : base(OperatingSystemFamily.Linux, isConfigured, formats)
     {
+        Rpm = rpm;
         Package = package;
         Icon = icon;
         Categories = categories;
@@ -380,6 +388,9 @@ public sealed class LinuxConfig : PlatformConfig
     /// <summary><c>[linux.deb]</c>; empty when absent.</summary>
     public LinuxDebConfig Deb { get; }
 
+    /// <summary><c>[linux.rpm]</c>; empty when absent.</summary>
+    public LinuxRpmConfig Rpm { get; }
+
     /// <summary>The package maintainer: <see cref="Maintainer"/>, or <paramref name="app"/>'s publisher.</summary>
     public string MaintainerOf(AppConfig app)
     {
@@ -405,6 +416,83 @@ public sealed class LinuxDebConfig
 
     /// <summary><c>depends</c>: relations for the control file's <c>Depends</c>, written verbatim, in order.</summary>
     public IReadOnlyList<string> Depends { get; }
+}
+
+/// <summary><c>[linux.rpm]</c>: settings of the rpm package only.</summary>
+public sealed class LinuxRpmConfig
+{
+    internal LinuxRpmConfig(IReadOnlyList<string> requires, string? license, RpmSigningConfig? signing)
+    {
+        Requires = requires;
+        License = license;
+        Signing = signing;
+    }
+
+    /// <summary>
+    /// <c>requires</c>: dependencies for the header's <c>Requires</c>, each written as in a spec
+    /// file's <c>Requires:</c> line with one dependency (<c>name</c>, <c>name &gt;= version</c> or a
+    /// rich dependency in parentheses), in order.
+    /// </summary>
+    public IReadOnlyList<string> Requires { get; }
+
+    /// <summary><c>license</c>: the header's <c>License</c> (an SPDX expression by convention), or null to leave it out.</summary>
+    public string? License { get; }
+
+    /// <summary><c>[linux.rpm.signing]</c>, or null to build unsigned packages.</summary>
+    public RpmSigningConfig? Signing { get; }
+}
+
+/// <summary><c>[linux.rpm.signing]</c>: the OpenPGP key rpm packages are signed with.</summary>
+public sealed class RpmSigningConfig
+{
+    private readonly string _baseDirectory;
+
+    internal RpmSigningConfig(string baseDirectory, ConfigValue key, ConfigValue? password)
+    {
+        _baseDirectory = baseDirectory;
+        Key = key;
+        Password = password;
+    }
+
+    /// <summary>
+    /// <c>key</c>: the ASCII-armored OpenPGP secret key itself (usually <c>{ env = "…" }</c>), or
+    /// the path of a file holding it (armored or binary), relative to the configuration directory.
+    /// </summary>
+    public ConfigValue Key { get; }
+
+    /// <summary><c>password</c>: the key's passphrase, or null for an unprotected key.</summary>
+    public ConfigValue? Password { get; }
+
+    /// <summary>
+    /// Returns the key: the value itself when it holds an armored block
+    /// (<c>-----BEGIN PGP …</c>), else the contents of the file it names.
+    /// </summary>
+    /// <exception cref="ConfigurationException">A referenced environment variable is not set, or the file cannot be read.</exception>
+    public byte[] ResolveKey(Func<string, string?>? environment = null)
+    {
+        var value = Key.Resolve(environment);
+        if (value.Contains("-----BEGIN PGP", StringComparison.Ordinal))
+        {
+            return System.Text.Encoding.UTF8.GetBytes(value);
+        }
+
+        var path = ConfigReader.ResolvePath(_baseDirectory, value.Trim());
+        try
+        {
+            return File.ReadAllBytes(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new ConfigurationException([new ConfigError(
+                $"{Key.Key}: the value is neither an armored OpenPGP key ('-----BEGIN PGP PRIVATE KEY BLOCK-----') nor a readable key file ({path}: {ex.Message})",
+                Key.Source,
+                Key.Position)]);
+        }
+    }
+
+    /// <summary>Resolves <see cref="Password"/>, or returns null when none is configured.</summary>
+    /// <exception cref="ConfigurationException">A referenced environment variable is not set.</exception>
+    public string? ResolvePassword(Func<string, string?>? environment = null) => Password?.Resolve(environment);
 }
 
 /// <summary><c>[macos]</c>: macOS package settings.</summary>
