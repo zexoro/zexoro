@@ -32,6 +32,12 @@ public sealed record NsisPackRequest
 
     public required NsisToolset Toolset { get; init; }
 
+    /// <summary>
+    /// The installer's architecture, as determined by the caller (the target platform); null to read
+    /// it from the main executable's PE header.
+    /// </summary>
+    public Architecture? Architecture { get; init; }
+
     /// <summary>The directory the installer is written to; created if missing.</summary>
     public required string OutputDirectory { get; init; }
 
@@ -92,8 +98,7 @@ public static class NsisPackager
     {
         ArgumentNullException.ThrowIfNull(request);
         var config = request.Config;
-        var windows = config.Windows
-            ?? throw new NsisException($"{config.Source}: there is no [windows] table, so there is nothing to build; add one to build a Windows installer.");
+        var windows = config.Windows;
         var input = config.Input;
         if (!Directory.Exists(input.Directory.FullPath))
         {
@@ -105,8 +110,12 @@ public static class NsisPackager
             throw new NsisException($"input.main: {input.Main.FullPath} not found.");
         }
 
-        var architecture = PeMachine.Read(input.Main.FullPath)
+        var architecture = request.Architecture ?? PeMachine.Read(input.Main.FullPath)
             ?? throw new NsisException($"input.main: {input.Main.FullPath} is not a Windows executable for x86, x64 or arm64.");
+        if (!UpdaterBinary.Architectures.Contains(architecture))
+        {
+            throw new NsisException($"NSIS installers support Windows x86, x64 and arm64, not {architecture.Name}.");
+        }
         if (!File.Exists(config.App.Icon.FullPath))
         {
             throw new NsisException($"app.icon: {config.App.Icon.FullPath} not found.");

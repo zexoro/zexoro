@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using Zexoro.Configuration;
+using Zexoro.Platforms;
 using Zexoro.Toml;
 
 namespace Zexoro.Core.Tests;
@@ -53,7 +54,14 @@ public class ZexoroConfigTests
         Assert.Equal(Full("build/win-x64"), config.Input.Directory.FullPath);
         Assert.Equal("ExampleNotes.exe", config.Input.Main.Value);
         Assert.Equal(Full("build/win-x64/ExampleNotes.exe"), config.Input.Main.FullPath);
-        Assert.Null(config.Windows);
+        Assert.Null(config.Input.Target);
+        Assert.False(config.Windows.IsConfigured);
+        Assert.Equal([PackageFormat.Nsis], config.Windows.Formats);
+        Assert.Equal(WindowsInstallScope.User, config.Windows.InstallScope);
+        Assert.False(config.Linux.IsConfigured);
+        Assert.Equal([PackageFormat.TarGz], config.Linux.Formats);
+        Assert.False(config.MacOS.IsConfigured);
+        Assert.Equal([PackageFormat.MacOSZip], config.MacOS.Formats);
     }
 
     [Fact]
@@ -241,7 +249,7 @@ public class ZexoroConfigTests
 
     [Theory]
     [InlineData("[window]", "unknown table [window]; did you mean 'windows'?")]
-    [InlineData("[macos]", "unknown table [macos]")]
+    [InlineData("[android]", "unknown table [android]")]
     [InlineData("[app.extra]", "unknown table [app.extra]")]
     public void Parse_UnknownTable_IsAnError(string header, string message)
     {
@@ -579,9 +587,11 @@ public class ZexoroConfigTests
 
         Assert.Equal("com.example.myapp", config.App.Id);
         Assert.Equal("0.1.0", config.App.Version.ToString());
-        Assert.Equal(WindowsInstallScope.User, config.Windows?.InstallScope);
-        Assert.Equal(WindowsShortcuts.StartMenu, config.Windows?.Shortcuts);
-        Assert.Null(config.Windows?.Signing);
+        Assert.True(config.Windows.IsConfigured);
+        Assert.Equal([PackageFormat.Nsis], config.Windows.Formats);
+        Assert.Equal(WindowsInstallScope.User, config.Windows.InstallScope);
+        Assert.Equal(WindowsShortcuts.StartMenu, config.Windows.Shortcuts);
+        Assert.Null(config.Windows.Signing);
     }
 
     [Fact]

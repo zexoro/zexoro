@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
+using Zexoro.Signing.Fixtures;
 
 namespace Zexoro.Cli.Tests;
 
@@ -64,7 +65,7 @@ public sealed class CommandTests : IDisposable
     private void WriteProject(string extra = "")
     {
         File.WriteAllText(ConfigPath, Config + extra);
-        WriteFile("build/win-x64/ExampleNotes.exe", [0x4D, 0x5A]);
+        WriteFile("build/win-x64/ExampleNotes.exe", TestPe.Build(pe32Plus: true));
         WriteFile("assets/app.ico", IcoHeader);
     }
 
@@ -212,7 +213,8 @@ public sealed class CommandTests : IDisposable
 
         Assert.Empty(Lines(Stdout, "error"));
         Assert.Equal(["warning  [windows.signing] is not configured; installers will be unsigned"], Lines(Stdout, "warning"));
-        Assert.Equal(8, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, icon, NSIS toolset, 3 updaters
+        Assert.Equal(9, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, target, icon, NSIS toolset, 3 updaters
+        Assert.Contains("ok       target win-x64 (input.main: a Windows x64 executable (PE)); formats: nsis", Stdout, StringComparison.Ordinal);
         Assert.Contains("0 errors, 1 warning.", Stdout, StringComparison.Ordinal);
     }
 
@@ -274,14 +276,53 @@ public sealed class CommandTests : IDisposable
     }
 
     [Fact]
-    public void Doctor_NoWindowsTable_Warns()
+    public void Doctor_NoWindowsTable_UsesTheWindowsDefaultsForAWindowsMain()
     {
         WriteProject();
         File.WriteAllText(ConfigPath, Config.Replace("[windows]", "", StringComparison.Ordinal));
 
         Assert.Equal(ExitCodes.Success, Run("doctor"));
 
-        Assert.Contains("warning  no target platform is configured", Stdout, StringComparison.Ordinal);
+        Assert.Contains("ok       target win-x64 (input.main: a Windows x64 executable (PE)); formats: nsis", Stdout, StringComparison.Ordinal);
+        Assert.Contains("bundled NSIS", Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Doctor_NoPlatformTableAndNoMain_Warns()
+    {
+        WriteProject();
+        File.WriteAllText(ConfigPath, Config.Replace("[windows]", "", StringComparison.Ordinal));
+        File.Delete(Path.Combine(_dir.FullName, "build", "win-x64", "ExampleNotes.exe"));
+
+        Assert.Equal(ExitCodes.Failure, Run("doctor"));
+
+        Assert.Contains("warning  the target platform is unknown until input.main exists", Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("NSIS", Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Doctor_MainNotAnExecutable_IsAnError()
+    {
+        WriteProject();
+        WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh\n"u8.ToArray());
+
+        Assert.Equal(ExitCodes.Failure, Run("doctor"));
+
+        Assert.Contains(Lines(Stdout, "error"), l => l.Contains("input.main:", StringComparison.Ordinal) && l.Contains("Set [input] target", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Doctor_LinuxTarget_SkipsWindowsChecksAndReportsUnimplementedFormats()
+    {
+        WriteProject();
+        File.WriteAllText(ConfigPath, Config.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"linux-x64\"", StringComparison.Ordinal));
+        WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh\n"u8.ToArray());
+
+        Assert.Equal(ExitCodes.Failure, Run("doctor"));
+
+        Assert.Contains("error    the linux format 'tar.gz' is not implemented yet", Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("NSIS", Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("windows.signing", Stdout, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -300,7 +341,7 @@ public sealed class CommandTests : IDisposable
     {
         WriteProject();
         File.WriteAllText(ConfigPath, Config.Replace("ExampleNotes.exe", "notes", StringComparison.Ordinal));
-        WriteFile("build/win-x64/notes", [1]);
+        WriteFile("build/win-x64/notes", TestPe.Build(pe32Plus: true));
 
         Assert.Equal(ExitCodes.Success, Run("doctor"));
 

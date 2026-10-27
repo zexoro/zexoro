@@ -25,6 +25,7 @@ public static class ConfigTemplate
         main = "MyApp.exe"                   # entry point, relative to dir
 
         [windows]
+        # formats     = ["nsis"]             # package formats to build; nsis is the one implemented so far
         install_scope = "user"               # user | machine
         shortcuts     = ["start-menu"]       # add "desktop" if wanted
         # license     = "LICENSE.txt"        # shown on an installer page

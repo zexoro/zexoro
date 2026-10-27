@@ -193,11 +193,121 @@ public sealed class PackCommandTests : IDisposable
     }
 
     [Fact]
-    public void Pack_NoWindowsTable_Fails()
+    public void Pack_NoWindowsTable_BuildsTheDefaultInstallerForAWindowsMain()
     {
         WriteProject(string.Empty);
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        Assert.Contains("Packing Example Notes 1.2.3 (com.example.notes) for win-x64: nsis", Stdout, StringComparison.Ordinal);
+        AssertInstaller(Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.exe"));
+    }
+
+    [Fact]
+    public void Pack_FormatOption_SelectsTheFormat()
+    {
+        WriteProject("[windows]\nformats = [\"nsis\"]\n");
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--format", "nsis"));
+
+        AssertInstaller(Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.exe"));
+    }
+
+    [Theory]
+    [InlineData("zip", "the windows format 'zip' is not implemented yet; this zexoro version packs nsis for windows")]
+    [InlineData("nsis,msi", "the windows format 'msi' is not implemented yet")]
+    [InlineData("deb", "--format: 'deb' is a linux format, but the target is win-x64 (input.main: a Windows x64 executable (PE)); formats for windows: nsis, zip, msi")]
+    [InlineData("nsi", "--format: unknown format 'nsi'; formats for windows: nsis, zip, msi; did you mean 'nsis'?")]
+    [InlineData("nsis,nsis", "--format: 'nsis' is listed twice")]
+    [InlineData("nsis,", "--format: 'nsis,' contains an empty format name")]
+    public void Pack_InvalidOrUnimplementedFormat_FailsBeforePacking(string formats, string message)
+    {
+        WriteProject("[windows]\n");
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--format", formats));
+
+        Assert.Contains(message, Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
+    }
+
+    [Fact]
+    public void Pack_UnimplementedFormatInConfiguration_FailsBeforePacking()
+    {
+        WriteProject("[windows]\nformats = [\"nsis\", \"zip\"]\n");
+
         Assert.Equal(ExitCodes.Failure, Run("pack"));
-        Assert.Contains("add a [windows] table", Stderr, StringComparison.Ordinal);
+
+        Assert.Contains("the windows format 'zip' is not implemented yet", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
+    }
+
+    [Fact]
+    public void Pack_LinuxTarget_ValidatesButIgnoresTheWindowsTable()
+    {
+        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"deb\"]\n");
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Equal("zexoro: the linux format 'deb' is not implemented yet; this zexoro version packs no linux formats" + Environment.NewLine, Stderr);
+    }
+
+    [Fact]
+    public void Pack_InputAndMainOptions_ReplaceTheConfiguredOnes()
+    {
+        WriteProject("[windows]\n");
+        Directory.Move(Path.Combine(_dir.FullName, "build", "win-x64"), Path.Combine(_dir.FullName, "out-x64"));
+        File.Move(Path.Combine(_dir.FullName, "out-x64", "ExampleNotes.exe"), Path.Combine(_dir.FullName, "out-x64", "Notes.exe"));
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "out-x64", "--main", "Notes.exe"));
+
+        AssertInstaller(Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.exe"));
+    }
+
+    [Fact]
+    public void Pack_MainOptionInvalid_Fails()
+    {
+        WriteProject("[windows]\n");
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--main", "../x.exe"));
+
+        Assert.Contains("zexoro: --main: '../x.exe' must not contain '.' or '..' segments", Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pack_TargetContradictingTheMain_Fails()
+    {
+        WriteProject("[windows]\n");
+        File.WriteAllText(Path.Combine(_dir.FullName, "zexoro.toml"), BaseConfig.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"win-arm64\"", StringComparison.Ordinal));
+
+        Assert.Equal(ExitCodes.Failure, Run("pack"));
+
+        Assert.Contains("input.target: 'win-arm64' does not match input.main", Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pack_ScriptMainWithWindowsTarget_BuildsTheInstaller()
+    {
+        WriteProject("[windows]\n");
+        File.WriteAllText(Path.Combine(_dir.FullName, "zexoro.toml"), BaseConfig.Replace("main = \"ExampleNotes.exe\"", "main = \"notes.cmd\"\ntarget = \"win-arm64\"", StringComparison.Ordinal));
+        WriteFile("build/win-x64/notes.cmd", "@echo off\r\n"u8.ToArray());
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        AssertInstaller(Path.Combine(Dist, "ExampleNotes-1.2.3-win-arm64.exe"));
+    }
+
+    /// <summary>A minimal 64-bit little-endian ELF header for x86-64.</summary>
+    private static byte[] ElfHeader()
+    {
+        var header = new byte[64];
+        "\u007FELF"u8.CopyTo(header);
+        header[4] = 2;
+        header[5] = 1;
+        header[6] = 1;
+        header[16] = 3;
+        header[18] = 62;
+        return header;
     }
 
     [Fact]
@@ -214,7 +324,7 @@ public sealed class PackCommandTests : IDisposable
         WriteProject("[windows]\n");
         WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh"u8.ToArray());
         Assert.Equal(ExitCodes.Failure, Run("pack"));
-        Assert.Contains("is not a Windows executable", Stderr, StringComparison.Ordinal);
+        Assert.Contains("is not a PE, ELF or Mach-O executable, so the target platform is unknown", Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -240,6 +350,10 @@ public sealed class PackCommandTests : IDisposable
     [InlineData("--config")]
     [InlineData("--output=")]
     [InlineData("--version", "1.0.0", "--version", "2.0.0")]
+    [InlineData("--format")]
+    [InlineData("--format", "nsis", "--format", "zip")]
+    [InlineData("--input=")]
+    [InlineData("--main")]
     public void Pack_BadArguments_IsUsageError(params string[] args)
     {
         Assert.Equal(ExitCodes.UsageError, Run(["pack", .. args]));

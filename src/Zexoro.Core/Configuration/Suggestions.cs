@@ -1,7 +1,7 @@
 namespace Zexoro.Configuration;
 
 /// <summary>Finds the closest known name for "did you mean" hints.</summary>
-internal static class Suggestions
+public static class Suggestions
 {
     /// <summary>
     /// Returns the candidate closest to <paramref name="value"/> by edit distance (ignoring case,
