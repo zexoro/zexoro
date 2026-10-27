@@ -36,6 +36,53 @@ public sealed class LinuxConfigTests
         Assert.Null(config.Linux.Maintainer);
         Assert.Equal("Example Ltd.", config.Linux.MaintainerOf(config.App));
         Assert.Empty(config.Linux.Deb.Depends);
+        Assert.Empty(config.Linux.Rpm.Requires);
+        Assert.Null(config.Linux.Rpm.License);
+        Assert.Null(config.Linux.Rpm.Signing);
+    }
+
+    [Fact]
+    public void Linux_RpmKeys_AreRead()
+    {
+        var config = Parse(Minimal + """
+            [linux.rpm]
+            requires = ["libicu >= 60", " (a or b) "]
+            license = "MIT"
+
+            [linux.rpm.signing]
+            key = { env = "RPM_KEY" }
+            password = { env = "RPM_PASSWORD" }
+            """);
+
+        Assert.Equal(["libicu >= 60", "(a or b)"], config.Linux.Rpm.Requires);
+        Assert.Equal("MIT", config.Linux.Rpm.License);
+        var signing = Assert.IsType<RpmSigningConfig>(config.Linux.Rpm.Signing);
+        Assert.Equal("RPM_KEY", signing.Key.EnvironmentVariable);
+        var armored = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nabc\n-----END PGP PRIVATE KEY BLOCK-----\n";
+        Assert.Equal(armored, System.Text.Encoding.UTF8.GetString(signing.ResolveKey(name => name == "RPM_KEY" ? armored : null)));
+        Assert.Equal("secret", signing.ResolvePassword(name => name == "RPM_PASSWORD" ? "secret" : null));
+    }
+
+    [Fact]
+    public void RpmSigning_KeyFile_IsReadRelativeToTheConfiguration()
+    {
+        var directory = Directory.CreateTempSubdirectory("zexoro-rpm-key-");
+        try
+        {
+            File.WriteAllBytes(Path.Combine(directory.FullName, "key.asc"), [1, 2, 3]);
+            var config = ZexoroConfig.Parse(Minimal + "[linux.rpm.signing]\nkey = \"key.asc\"\n", directory.FullName);
+            var signing = config.Linux.Rpm.Signing!;
+
+            Assert.Equal([1, 2, 3], signing.ResolveKey());
+            Assert.Null(signing.ResolvePassword());
+            File.Delete(Path.Combine(directory.FullName, "key.asc"));
+            var error = Assert.Throws<ConfigurationException>(() => signing.ResolveKey());
+            Assert.StartsWith("linux.rpm.signing.key: the value is neither an armored OpenPGP key", Assert.Single(error.Errors).Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -84,6 +131,9 @@ public sealed class LinuxConfigTests
     [InlineData("[linux.deb]\ndepends = [\"a\\nPackage: b\"]", "linux.deb.depends[0] must be one line of text, such as 'libicu74 | libicu72'")]
     [InlineData("[linux.deb]\ndepends = \"libc6\"", "linux.deb.depends must be an array, but is a string")]
     [InlineData("[linux.deb]\nrequires = []", "unknown key 'linux.deb.requires'")]
+    [InlineData("[linux.rpm]\nrequires = [\"a\\nb\"]", "linux.rpm.requires[0] must be one line of text, such as 'libicu >= 60'")]
+    [InlineData("[linux.rpm]\nlicense = \" \"", "linux.rpm.license must be one line of text, such as 'MIT' or 'LicenseRef-Proprietary'")]
+    [InlineData("[linux.rpm.signing]\npassword = \"x\"", "[linux.rpm.signing]: missing required key 'key'")]
     public void Linux_InvalidKeys_AreErrors(string line, string message) =>
         Assert.Equal(message, Assert.Single(Errors(Minimal + "[linux]\n" + line + "\n")).Message);
 

@@ -13,6 +13,9 @@
     <ProjectReference Include="..\..\src\Zexoro.Signing\Zexoro.Signing.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="OpenPgpKeys\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="..\Zexoro.Signing.Fixtures\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

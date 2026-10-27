@@ -384,7 +384,8 @@ jobs:
   # shared update scenario of docs/design/0006-desktop-formats.md section 5, plus a directory that
   # is not writable (exit 7), for each pack host's archives. Then the deb packages: dpkg-deb
   # checks, install with apt, the notify scenario, upgrade, remove and purge, on the runner and in
-  # a debian:stable container (with lintian).
+  # a debian:stable container (with lintian). Then the rpm packages in Fedora, Rocky Linux and
+  # openSUSE Leap containers.
   e2e-linux:
     name: e2e on ${{ matrix.os }} (packed on ${{ matrix.host }})
     needs: build
@@ -430,10 +431,26 @@ jobs:
             lintian --version
             tests/e2e/unix/run-deb-e2e.sh e2e'
 
-  # A zip, a tar.gz and a deb of fixed files must have the same bytes whichever host packed them
-  # (docs/design/0006-desktop-formats.md section 5).
+      # rpm packages in containers of three rpm distributions (docs/design/0006-desktop-formats.md
+      # section 5): rpm -K, rpmkeys, gpg --verify on the extracted header signature, install with
+      # dnf or zypper, the notify scenario, upgrade and remove. Fedora runs with
+      # %_pkgverify_level all, the default RPM 6 announced, and also runs rpmlint.
+      - name: rpm in fedora:latest (dnf, RPM 6 enforcement, rpmlint)
+        if: ${{ !cancelled() }}
+        run: tests/e2e/unix/run-rpm-in-container.sh fedora:latest e2e enforce
+
+      - name: rpm in rockylinux:9 (dnf, rpm 4.16)
+        if: ${{ !cancelled() }}
+        run: tests/e2e/unix/run-rpm-in-container.sh rockylinux:9 e2e
+
+      - name: rpm in opensuse/leap (zypper)
+        if: ${{ !cancelled() }}
+        run: tests/e2e/unix/run-rpm-in-container.sh opensuse/leap:latest e2e
+
+  # A zip, a tar.gz, a deb and a signed rpm of fixed files must have the same bytes whichever host
+  # packed them (docs/design/0006-desktop-formats.md section 5).
   reproducible:
-    name: zip, tar.gz and deb are reproducible across hosts
+    name: zip, tar.gz, deb and rpm are reproducible across hosts
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -446,7 +463,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for ext in zip tar.gz deb; do
+          for ext in zip tar.gz deb rpm; do
             sha256sum e2e/*/repro/*.$ext
             count=$(ls e2e/*/repro/*.$ext | wc -l)
             test "$count" -eq 3 || { echo "::error::expected 3 repro $ext archives, found $count"; exit 1; }
@@ -456,3 +473,4 @@ jobs:
           tar -tzvf "$(ls e2e/*/repro/*.tar.gz | head -1)" --numeric-owner --utc
           dpkg-deb --info "$(ls e2e/*/repro/*.deb | head -1)"
           dpkg-deb --contents "$(ls e2e/*/repro/*.deb | head -1)"
+          docker run --rm -v "$PWD/e2e:/e2e:ro" fedora:latest bash -c 'f="$(ls /e2e/*/repro/*.rpm | head -1)"; rpm -qip "$f"; rpm -qlvp "$f"; rpm -K -v "$f" || true'

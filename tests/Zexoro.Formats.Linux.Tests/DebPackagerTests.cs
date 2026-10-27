@@ -239,11 +239,11 @@ public sealed class DebPackagerTests : IDisposable
     }
 
     [Fact]
-    public void Pack_Prerelease_UsesATilde()
+    public void Pack_Prerelease_HasATildeInTheVersionAndADotInTheFileName()
     {
         var result = Pack(Config(version: "2.0.0-beta.1+ci.7"));
 
-        Assert.Equal(Path.Combine(Dist, "notes_2.0.0~beta.1_amd64.deb"), result.PackagePath);
+        Assert.Equal(Path.Combine(Dist, "notes_2.0.0.beta.1_amd64.deb"), result.PackagePath);
         Assert.Equal("2.0.0~beta.1", ControlFields(result.Control)["Version"]);
         using var record = JsonDocument.Parse(ReadTar(ReadAr(result.PackagePath)[2].Content)["./opt/notes/zexoro-install.json"].Content);
         Assert.Equal("2.0.0-beta.1+ci.7", record.RootElement.GetProperty("version").GetString());

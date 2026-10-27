@@ -16,20 +16,26 @@
 #   deb/zexoro-e2e_{1.0.0,2.0.0}_{amd64,arm64}.deb       deb packages with [updates] (and *.deb.release.json)
 #   deb/no-updates/zexoro-e2e_1.0.0_{amd64,arm64}.deb    deb packages without [updates]
 #   repro/repro_1.0.0_amd64.deb                         a deb of the same files; likewise
+#   rpm/zexoro-e2e-{1.0.0,2.0.0}-1.{x86_64,aarch64}.rpm  rpm packages signed with rpm-signing.key.asc, with [updates] (and *.rpm.release.json)
+#   rpm/unsigned/zexoro-e2e-1.0.0-1.{x86_64,aarch64}.rpm unsigned rpm packages without [updates]
+#   repro/repro-1.0.0-1.x86_64.rpm                      a signed rpm of the same files (SOURCE_DATE_EPOCH fixes the signature time); likewise
+#   rpm-signing.pub.asc                                 the OpenPGP public key the rpm packages are signed with
 #   linux/links                                         present when the tar.gz inputs hold a symbolic link
 #                                                       (app/bin/version.txt -> ../version.txt; not on Windows hosts)
 #   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #   zexoro-update.pub                                   the update public key the installers trust
 #   zexoro-update.key.pem                               its (throwaway) private key, to publish more feeds while testing
-#   feeds/{user,machine,portable,tar,deb}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
-#   feeds/{user,machine,portable,tar,deb}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
-#   feeds/{user,machine,portable,tar,deb}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
-#   (feeds/tar/* and feeds/deb/* list the x64 and arm64 packages of each version)
+#   feeds/{user,machine,portable,tar,deb,rpm}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
+#   feeds/{user,machine,portable,tar,deb,rpm}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
+#   feeds/{user,machine,portable,tar,deb,rpm}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
+#   (feeds/tar/*, feeds/deb/* and feeds/rpm/* list the x64 and arm64 packages of each version)
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
 # The packages' [updates] point at http://localhost:8080/<kind>/stable/, where
 # tests/e2e/windows/Run-UpdateE2E.ps1 (user, machine), Run-ZipE2E.ps1 (portable) and
-# tests/e2e/unix/run-tar-e2e.sh (tar) and run-deb-e2e.sh (deb) serve the feeds and packages.
+# tests/e2e/unix/run-tar-e2e.sh (tar), run-deb-e2e.sh (deb) and run-rpm-e2e.sh (rpm) serve the feeds
+# and packages. The rpm signing key is a committed throwaway key (tests/e2e/rpm-signing/, password
+# e2e-password), so every pack host signs with the same key.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -252,6 +258,63 @@ for arch in x64 arm64; do
   (cd "$work" && "$cli" pack --output "$out/deb/no-updates")
 done
 
+# rpm_config <version> <arch> <signed with [updates]: yes|no>: writes $work/zexoro.toml for the rpm package.
+rpm_config() {
+  local version=$1 arch=$2 signed=$3
+  cat > "$work/zexoro.toml" <<TOML
+[app]
+id          = "dev.zexoro.e2e.rpm"
+name        = "Zexoro E2E Rpm"
+version     = "$version"
+publisher   = "zexoro e2e"
+icon        = "app.ico"
+description = "End-to-end test application\nPackaged by tests/e2e/pack.sh to test zexoro's rpm packages."
+url         = "https://github.com/zexoro/zexoro"
+
+[input]
+dir  = "input-linux-$arch/$version"
+main = "FixtureApp"
+
+[linux]
+formats    = ["rpm"]
+package    = "zexoro-e2e"
+maintainer = "zexoro e2e <e2e@zexoro.invalid>"
+categories = ["Utility"]
+
+[linux.rpm]
+requires = ["coreutils"]
+license  = "MIT"
+TOML
+  if [ "$signed" = yes ]; then
+    cat >> "$work/zexoro.toml" <<TOML
+
+[linux.rpm.signing]
+key      = { env = "E2E_RPM_KEY" }
+password = { env = "E2E_RPM_PASSWORD" }
+
+[updates]
+feed     = "http://localhost:8080/rpm/{channel}/feed.json"
+download = "http://localhost:8080/rpm/{channel}/{file}"
+keys     = [{ file = "keys/zexoro-update.pub" }]
+TOML
+  fi
+}
+
+E2E_RPM_KEY="$(cat "$here/rpm-signing/rpm-signing.key.asc")"
+export E2E_RPM_KEY E2E_RPM_PASSWORD=e2e-password
+cp "$here/rpm-signing/rpm-signing.pub.asc" "$out/rpm-signing.pub.asc"
+for arch in x64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    echo "== Packing rpm $version linux-$arch (signed)"
+    rpm_config "$version" "$arch" yes
+    (cd "$work" && "$cli" pack --output "$out/rpm")
+  done
+  echo "== Packing rpm 1.0.0 linux-$arch (unsigned, without [updates])"
+  rpm_config 1.0.0 "$arch" no
+  (cd "$work" && "$cli" pack --output "$out/rpm/unsigned") | tee "$work/rpm-unsigned.log"
+  grep -q "notice: \[linux.rpm.signing\] is not configured; the rpm is unsigned" "$work/rpm-unsigned.log"
+done
+
 echo "== Packing a zip and a tar.gz of fixed files (reproducibility across pack hosts)"
 mkdir -p "$work/repro/bin/empty"
 printf '@echo off\r\necho repro\r\n' > "$work/repro/bin/run.cmd"
@@ -280,6 +343,10 @@ sed -e 's/main   = "run.cmd"/main   = "run.sh"/' -e 's/target = "win-x64"/target
 grep -q 'target = "linux-x64"' "$work/repro/linux.toml"
 (cd "$work/repro" && "$cli" pack --config linux.toml --output "$out/repro")
 (cd "$work/repro" && "$cli" pack --config linux.toml --format deb --output "$out/repro")
+# A signed rpm: the committed key and a fixed signature time make its bytes host-independent too.
+cp "$here/rpm-signing/rpm-signing.key.asc" "$work/repro/rpm-signing.key.asc"
+printf '\n[linux.rpm.signing]\nkey      = "rpm-signing.key.asc"\npassword = "e2e-password"\n' >> "$work/repro/linux.toml"
+(cd "$work/repro" && SOURCE_DATE_EPOCH=1780000000 "$cli" pack --config linux.toml --format rpm --output "$out/repro")
 
 echo "== Installers"
 (cd "$out" && find . -type f | sort)
@@ -303,7 +370,15 @@ for debarch in amd64 arm64; do
   done
   test -f "$out/deb/no-updates/zexoro-e2e_1.0.0_$debarch.deb" || { echo "missing deb/no-updates/zexoro-e2e_1.0.0_$debarch.deb" >&2; exit 1; }
 done
-for f in repro/repro_1.0.0_amd64.deb unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
+for rpmarch in x86_64 aarch64; do
+  for version in 1.0.0 2.0.0; do
+    f="rpm/zexoro-e2e-$version-1.$rpmarch.rpm"
+    test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
+    test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
+  done
+  test -f "$out/rpm/unsigned/zexoro-e2e-1.0.0-1.$rpmarch.rpm" || { echo "missing rpm/unsigned/zexoro-e2e-1.0.0-1.$rpmarch.rpm" >&2; exit 1; }
+done
+for f in repro/repro-1.0.0-1.x86_64.rpm repro/repro_1.0.0_amd64.deb unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
   repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-arm64.tar.gz; do
   test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
 done
@@ -311,7 +386,7 @@ if ls "$out"/portable/*.exe >/dev/null 2>&1; then
   echo "formats = [\"zip\"] also built an installer" >&2
   exit 1
 fi
-if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json "$out"/deb/no-updates/*.release.json >/dev/null 2>&1; then
+if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json "$out"/deb/no-updates/*.release.json "$out"/rpm/unsigned/*.release.json >/dev/null 2>&1; then
   echo "a package without [updates] got a release fragment" >&2
   exit 1
 fi
@@ -319,7 +394,7 @@ fi
 echo "== Publishing signed feeds (one per application)"
 "$cli" keys new --output "$work/keys" --name other
 cp "$work/keys/zexoro-update.key.pem" "$out/zexoro-update.key.pem"
-for scope in user machine portable tar deb; do
+for scope in user machine portable tar deb rpm; do
   title="$(printf '%s' "${scope:0:1}" | tr '[:lower:]' '[:upper:]')${scope:1}"
   if [ "$scope" = tar ]; then
     # Both architectures of each version: one release with two artifacts.
@@ -328,6 +403,9 @@ for scope in user machine portable tar deb; do
   elif [ "$scope" = deb ]; then
     v1=("$out"/deb/zexoro-e2e_1.0.0_*.deb.release.json)
     v2=("$out"/deb/zexoro-e2e_2.0.0_*.deb.release.json)
+  elif [ "$scope" = rpm ]; then
+    v1=("$out"/rpm/zexoro-e2e-1.0.0-1.*.rpm.release.json)
+    v2=("$out"/rpm/zexoro-e2e-2.0.0-1.*.rpm.release.json)
   else
     extension=$([ "$scope" = portable ] && echo zip || echo exe)
     v1=("$out/$scope/ZexoroE2E$title-1.0.0-win-x64.$extension.release.json")

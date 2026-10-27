@@ -327,15 +327,17 @@ public sealed class CommandTests : IDisposable
         WriteProject();
         File.WriteAllText(
             ConfigPath,
-            Config.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"linux-x64\"", StringComparison.Ordinal) + "\n[linux]\nformats = [\"tar.gz\", \"deb\", \"rpm\"]\n");
+            Config.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"linux-x64\"", StringComparison.Ordinal) + "\n[linux]\nformats = [\"tar.gz\", \"deb\", \"rpm\", \"apk\"]\n");
         WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh\n"u8.ToArray());
         WriteFile("assets/app.ico", TestIcon.Create());
 
         Assert.Equal(ExitCodes.Failure, Run("doctor"));
 
-        Assert.Contains("error    the linux format 'rpm' is not implemented yet", Stdout, StringComparison.Ordinal);
+        Assert.Contains("error    the linux format 'apk' is not implemented yet", Stdout, StringComparison.Ordinal);
+        Assert.Contains("warning  [linux.rpm.signing] is not configured; rpm packages will be unsigned", Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("'tar.gz' is not implemented", Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("'deb' is not implemented", Stdout, StringComparison.Ordinal);
+        Assert.DoesNotContain("'rpm' is not implemented", Stdout, StringComparison.Ordinal);
         Assert.Contains("linux icon: converted from app.icon (16x16 PNG)", Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("NSIS", Stdout, StringComparison.Ordinal);
         Assert.DoesNotContain("windows.signing", Stdout, StringComparison.Ordinal);

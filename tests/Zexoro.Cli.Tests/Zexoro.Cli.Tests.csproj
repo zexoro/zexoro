@@ -13,4 +13,7 @@
   <ItemGroup>
     <Compile Include="..\Zexoro.Signing.Fixtures\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="..\e2e\rpm-signing\rpm-signing.key.asc" Link="rpm-signing.key.asc" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

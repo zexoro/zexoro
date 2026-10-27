@@ -244,12 +244,12 @@ public sealed class PackCommandTests : IDisposable
     [Fact]
     public void Pack_LinuxTarget_ValidatesButIgnoresTheWindowsTable()
     {
-        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"rpm\"]\n");
+        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"apk\"]\n");
         WriteFile("build/linux/notes", ElfHeader());
 
         Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
 
-        Assert.Equal("zexoro: the linux format 'rpm' is not implemented yet; this zexoro version packs tar.gz, deb for linux" + Environment.NewLine, Stderr);
+        Assert.Equal("zexoro: the linux format 'apk' is not implemented yet; this zexoro version packs tar.gz, deb, rpm for linux" + Environment.NewLine, Stderr);
     }
 
     [Fact]
@@ -495,6 +495,67 @@ public sealed class PackCommandTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", package + ".release.json"));
         Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/stable.json"));
+    }
+
+    [Fact]
+    public void Pack_LinuxRpmSigned_WritesASignedPackageAndAReleaseFragment()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-linux-x64", ElfHeader());
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "rpm-signing.key.asc"), Path.Combine(_dir.FullName, "rpm.asc"));
+        _variables["RPM_PASSWORD"] = "e2e-password";
+        _variables["SOURCE_DATE_EPOCH"] = "1780000000";
+        WriteProject(
+            "[linux]\nformats = [\"rpm\"]\n\n[linux.rpm]\nlicense = \"MIT\"\n\n[linux.rpm.signing]\nkey = \"rpm.asc\"\npassword = { env = \"RPM_PASSWORD\" }\n" + UpdatesTable);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("Signing the rpm header with RSA 4096 key 1BF4EAF6A3E2C9671AC00DEAE2AB728735D9A497", Stdout, StringComparison.Ordinal);
+        var package = Assert.Single(Directory.GetFiles(Dist, "*.rpm"));
+        Assert.EndsWith("-1.2.3-1.x86_64.rpm", package, StringComparison.Ordinal);
+        var first = File.ReadAllBytes(package);
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(package + ".release.json"));
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("linux", "x64", "rpm", "machine"), artifact.Target);
+        Assert.Equal(Zexoro.Formats.Linux.RpmPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", package + ".release.json"));
+
+        // With SOURCE_DATE_EPOCH the signature time is fixed and RSA signatures are deterministic.
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes"));
+        Assert.Equal(first, File.ReadAllBytes(package));
+    }
+
+    [Theory]
+    [InlineData("nope", "linux.rpm.signing.key: The password of the OpenPGP key 1BF4EAF6A3E2C9671AC00DEAE2AB728735D9A497 is wrong.")]
+    [InlineData(null, "linux.rpm.signing.key: The OpenPGP key 1BF4EAF6A3E2C9671AC00DEAE2AB728735D9A497 is protected by a passphrase; set its password in the configuration.")]
+    public void Pack_LinuxRpmWithAWrongPassword_FailsBeforeWriting(string? password, string message)
+    {
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "rpm-signing.key.asc"), Path.Combine(_dir.FullName, "rpm.asc"));
+        _variables["RPM_KEY"] = File.ReadAllText(Path.Combine(_dir.FullName, "rpm.asc"));
+        var passwordLine = password is null ? string.Empty : $"password = \"{password}\"\n";
+        WriteProject("[linux]\nformats = [\"rpm\"]\n\n[linux.rpm.signing]\nkey = { env = \"RPM_KEY\" }\n" + passwordLine);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Equal("zexoro: " + message + Environment.NewLine, Stderr);
+        Assert.False(Directory.Exists(Dist) && Directory.GetFiles(Dist, "*.rpm").Length > 0);
+    }
+
+    [Fact]
+    public void Pack_LinuxRpmSignedBeforeTheKeyExisted_Fails()
+    {
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "rpm-signing.key.asc"), Path.Combine(_dir.FullName, "rpm.asc"));
+        _variables["SOURCE_DATE_EPOCH"] = "1000000000";
+        WriteProject("[linux]\nformats = [\"rpm\"]\n\n[linux.rpm.signing]\nkey = \"rpm.asc\"\npassword = \"e2e-password\"\n");
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Contains("lies before the OpenPGP key", Stderr, StringComparison.Ordinal);
     }
 
     [Fact]
