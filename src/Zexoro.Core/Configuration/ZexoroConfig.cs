@@ -13,8 +13,9 @@ public sealed class ZexoroConfig
     /// <summary>The configuration file name that <c>zexoro init</c> writes and the CLI looks for.</summary>
     public const string DefaultFileName = "zexoro.toml";
 
-    internal ZexoroConfig(string source, string baseDirectory, AppConfig app, InputConfig input, WindowsConfig? windows)
+    internal ZexoroConfig(string source, string baseDirectory, AppConfig app, InputConfig input, WindowsConfig? windows, UpdatesConfig? updates)
     {
+        Updates = updates;
         Source = source;
         BaseDirectory = baseDirectory;
         App = app;
@@ -36,6 +37,9 @@ public sealed class ZexoroConfig
 
     /// <summary><c>[windows]</c>, or null when the table is absent (no Windows target configured).</summary>
     public WindowsConfig? Windows { get; }
+
+    /// <summary><c>[updates]</c>, or null when the table is absent (installers without an updater).</summary>
+    public UpdatesConfig? Updates { get; }
 
     /// <summary>Reads and validates a configuration file.</summary>
     /// <param name="path">The file to read.</param>
@@ -273,4 +277,131 @@ public sealed class WindowsUninstallConfig
     /// as written. Their syntax is interpreted by the Windows installer back end.
     /// </summary>
     public IReadOnlyList<string> Remove { get; }
+}
+
+/// <summary>A trusted update key from <c>[updates] keys</c>: a literal base64 key or <c>{ file = "…" }</c>.</summary>
+public sealed class UpdateKeyConfig
+{
+    internal UpdateKeyConfig(string key, string? literal, ConfigPath? file, TomlPosition position)
+    {
+        Key = key;
+        Literal = literal;
+        File = file;
+        Position = position;
+    }
+
+    /// <summary>The element's name in messages, e.g. <c>updates.keys[1]</c>.</summary>
+    public string Key { get; }
+
+    /// <summary>The canonical base64 key, or null for a file reference.</summary>
+    public string? Literal { get; }
+
+    /// <summary>The <c>.pub</c> file, or null for a literal key.</summary>
+    public ConfigPath? File { get; }
+
+    public TomlPosition Position { get; }
+}
+
+/// <summary>
+/// <c>[updates]</c>: where installs look for updates and which keys they trust
+/// (docs/design/0005-nsis-updates.md section 1).
+/// </summary>
+public sealed class UpdatesConfig
+{
+    /// <summary>The placeholder <c>feed</c> must contain.</summary>
+    public const string ChannelPlaceholder = "{channel}";
+
+    public const string FilePlaceholder = "{file}";
+
+    public const string VersionPlaceholder = "{version}";
+
+    private readonly string _source;
+
+    internal UpdatesConfig(string source, string feed, string download, string channel, IReadOnlyList<UpdateKeyConfig> keys)
+    {
+        _source = source;
+        FeedTemplate = feed;
+        DownloadTemplate = download;
+        Channel = channel;
+        Keys = keys;
+    }
+
+    /// <summary><c>feed</c>: the feed URL template, containing <c>{channel}</c>.</summary>
+    public string FeedTemplate { get; }
+
+    /// <summary><c>download</c>: the artifact URL template, with <c>{file}</c>, <c>{version}</c> and <c>{channel}</c>.</summary>
+    public string DownloadTemplate { get; }
+
+    /// <summary>The channel: <c>--channel</c>, else <c>channel</c>, else <c>stable</c>.</summary>
+    public string Channel { get; }
+
+    /// <summary><c>keys</c>: at least one trusted key.</summary>
+    public IReadOnlyList<UpdateKeyConfig> Keys { get; }
+
+    /// <summary>The feed URL of <see cref="Channel"/>.</summary>
+    public Uri FeedUrl => Expand(FeedTemplate, Channel, null, null);
+
+    /// <summary>The download URL of an artifact of <see cref="Channel"/>.</summary>
+    public Uri DownloadUrl(string file, string version) => Expand(DownloadTemplate, Channel, file, version);
+
+    /// <summary>Returns every key as canonical base64 text, reading key files.</summary>
+    /// <exception cref="ConfigurationException">A key file cannot be read or holds no valid key.</exception>
+    public IReadOnlyList<string> ResolveKeys()
+    {
+        var keys = new List<string>();
+        var errors = new List<ConfigError>();
+        foreach (var key in Keys)
+        {
+            if (key.Literal is { } literal)
+            {
+                keys.Add(literal);
+                continue;
+            }
+
+            var file = key.File!;
+            string text;
+            try
+            {
+                text = System.IO.File.ReadAllText(file.FullPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                errors.Add(new ConfigError($"{key.Key}: cannot read the key file {file.FullPath}: {ex.Message}", _source, key.Position));
+                continue;
+            }
+
+            if (UpdateRules.TryDecodePublicKey(text, out var bytes, out var error))
+            {
+                keys.Add(Convert.ToBase64String(bytes));
+            }
+            else
+            {
+                errors.Add(new ConfigError($"{key.Key}: {file.FullPath} holds no valid update public key: {error}", _source, key.Position));
+            }
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new ConfigurationException(errors);
+        }
+
+        return keys.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>Replaces the placeholders with URL-escaped values; the template was validated when it was read.</summary>
+    internal static Uri Expand(string template, string channel, string? file, string? version)
+    {
+        var text = template.Replace(ChannelPlaceholder, Uri.EscapeDataString(channel), StringComparison.Ordinal);
+        if (file is not null)
+        {
+            text = text.Replace(FilePlaceholder, Uri.EscapeDataString(file), StringComparison.Ordinal);
+        }
+
+        if (version is not null)
+        {
+            text = text.Replace(VersionPlaceholder, Uri.EscapeDataString(version), StringComparison.Ordinal);
+        }
+
+        return new Uri(text, UriKind.Absolute);
+    }
 }

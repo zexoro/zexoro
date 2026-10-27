@@ -32,6 +32,7 @@ public sealed class PackCommandTests : IDisposable
     private readonly StringWriter _stdout = new();
     private readonly StringWriter _stderr = new();
     private readonly Dictionary<string, string> _variables = [];
+    private readonly List<string> _stagings = [];
 
     public PackCommandTests()
     {
@@ -43,6 +44,10 @@ public sealed class PackCommandTests : IDisposable
         _stdout.Dispose();
         _stderr.Dispose();
         _dir.Delete(recursive: true);
+        foreach (var staging in _stagings)
+        {
+            Directory.Delete(staging, recursive: true);
+        }
     }
 
     private string Stdout => _stdout.ToString();
@@ -280,4 +285,199 @@ public sealed class PackCommandTests : IDisposable
     [InlineData("--request", "r.json", "a.exe", "b.exe")]
     public void SignFile_BadArguments_IsUsageError(params string[] args) =>
         Assert.Equal(ExitCodes.UsageError, Run(["sign-file", .. args]));
+
+    private const string UpdatesTable = """
+
+        [updates]
+        feed = "https://example.com/updates/{channel}/feed.json"
+        download = "https://example.com/dl/{channel}/{file}"
+        keys = [{ file = "keys/zexoro-update.pub" }]
+
+        """;
+
+    /// <summary>A key pair from <c>keys new</c> and a fake x64 updater in <c>ZEXORO_UPDATER_DIR</c>.</summary>
+    private void PrepareUpdates()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-win-x64.exe", TestPe.Build(pe32Plus: true, seed: 9));
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+    }
+
+    [Fact]
+    public void Pack_WithUpdates_WritesAReleaseFragmentThatFeedAddAccepts()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--channel", "beta", "--notes", "https://example.com/notes/1.2.3"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("Adding zexoro-updater.exe", Stdout, StringComparison.Ordinal);
+        var installer = Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.exe");
+        AssertInstaller(installer);
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(installer + ".release.json"));
+        Assert.Equal("com.example.notes", fragment.App);
+        Assert.Equal("beta", fragment.Channel);
+        Assert.Equal("1.2.3", fragment.Release.Version.ToString());
+        Assert.Equal("https://example.com/notes/1.2.3", fragment.Release.Notes);
+        Assert.Equal(NsisScript.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("windows", "x64", "nsis", "user"), artifact.Target);
+        Assert.Equal(new Uri("https://example.com/dl/beta/ExampleNotes-1.2.3-win-x64.exe"), artifact.Url);
+        Assert.Equal(new FileInfo(installer).Length, artifact.Size);
+        Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(installer))), artifact.Sha256);
+
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/beta.json", "--key", "keys/zexoro-update.key.pem", installer + ".release.json"));
+        Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/beta.json"));
+    }
+
+    [Fact]
+    public void Pack_WithUpdatesMachineScope_Builds()
+    {
+        PrepareUpdates();
+        WriteFile("updaters/zexoro-updater-win-x86.exe", TestPe.Build(pe32Plus: false, seed: 10));
+        WriteProject("[windows]\ninstall_scope = \"machine\"\n" + UpdatesTable, pe32Plus: false);
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        var installer = Path.Combine(Dist, "ExampleNotes-1.2.3-win-x86.exe");
+        AssertInstaller(installer);
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(installer + ".release.json"));
+        Assert.Equal("stable", fragment.Channel);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("windows", "x86", "nsis", "machine"), Assert.Single(fragment.Release.Artifacts).Target);
+    }
+
+    [Fact]
+    public void Pack_WithUpdatesWithoutUpdater_FailsClearly()
+    {
+        PrepareUpdates();
+        File.Delete(Path.Combine(_dir.FullName, "updaters", "zexoro-updater-win-x64.exe"));
+        WriteProject("[windows]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Failure, Run("pack"));
+
+        Assert.Contains("zexoro-updater-win-x64.exe does not exist", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
+    }
+
+    [Fact]
+    public void Pack_WithUpdatesMissingKeyFile_ReportsThePosition()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\n" + UpdatesTable.Replace("zexoro-update.pub", "missing.pub", StringComparison.Ordinal));
+
+        Assert.Equal(ExitCodes.Failure, Run("pack"));
+
+        Assert.Contains("zexoro.toml:17:9: updates.keys[0]: cannot read the key file", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
+    }
+
+    [Fact]
+    public void Pack_WithoutUpdates_WritesNoFragment()
+    {
+        WriteProject("[windows]\n");
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        Assert.Empty(Directory.GetFiles(Dist, "*.release.json"));
+    }
+
+    [Theory]
+    [InlineData("--notes", "https://example.com/notes", "no [updates] table")]
+    [InlineData("--channel", "beta", "--channel: there is no [updates] table")]
+    public void Pack_UpdateOptionsWithoutUpdates_Fail(string option, string value, string message)
+    {
+        WriteProject("[windows]\n");
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", option, value));
+
+        Assert.Contains(message, Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pack_NotesNotAUrl_Fails()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--notes", "see the blog"));
+
+        Assert.Contains("--notes: 'see the blog' is not an absolute http or https URL", Stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Doctor_WithUpdates_ReportsTheFeedAndMissingUpdatersAsErrors()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\n" + UpdatesTable);
+
+        Run("doctor");
+
+        var output = Stdout + Stderr;
+        Assert.Contains("updates: channel stable, feed https://example.com/updates/stable/feed.json, 1 trusted key(s)", output, StringComparison.Ordinal);
+        Assert.Matches("(?m)^error +updater: .*zexoro-updater-win-x86.exe does not exist", output);
+    }
+
+    [Fact]
+    public void Pack_WithCertificateAndUpdates_SignsTheUpdater()
+    {
+        PrepareUpdates();
+        using var certificate = TestCertificates.CreateSelfSigned(ecdsa: false);
+        WriteFile("cert.pfx", certificate.Export(X509ContentType.Pkcs12, "pfx-pass"));
+        _variables["CERT_PASSWORD"] = "pfx-pass";
+        WriteProject("""
+            [windows]
+
+            [windows.signing]
+            certificate = "cert.pfx"
+            password = { env = "CERT_PASSWORD" }
+
+            """ + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        Assert.Contains("Signing zexoro-updater.exe", Stdout, StringComparison.Ordinal);
+
+        // The staged copy, as it goes into the installer: signed with the application's certificate.
+        var staged = PackKeepingStaging(withSigning: true);
+        var updater = File.ReadAllBytes(Path.Combine(staged, NsisInstallerSpec.UpdaterFileName));
+        Assert.True(AuthenticodeSigner.IsSigned(Path.Combine(staged, NsisInstallerSpec.UpdaterFileName)));
+        var entry = TestPe.CertificateEntryOffset(pe32Plus: true);
+        var offset = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(updater.AsSpan(entry));
+        var size = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(updater.AsSpan(entry + 4));
+        Assert.True(updater.AsSpan(offset, size).IndexOf(certificate.RawData) >= 0, "the signature does not carry the application's certificate");
+
+        // The source in ZEXORO_UPDATER_DIR is left alone, and an unsigned build ships it unsigned.
+        Assert.False(AuthenticodeSigner.IsSigned(Path.Combine(_dir.FullName, "updaters", "zexoro-updater-win-x64.exe")));
+        var unsigned = PackKeepingStaging(withSigning: false);
+        Assert.False(AuthenticodeSigner.IsSigned(Path.Combine(unsigned, NsisInstallerSpec.UpdaterFileName)));
+    }
+
+    /// <summary>Packs the current project with <see cref="NsisPackager"/> directly and returns the kept staging directory.</summary>
+    private string PackKeepingStaging(bool withSigning)
+    {
+        var environment = new CliEnvironment(_dir.FullName, name => _variables.GetValueOrDefault(name)) { ZexoroCommand = DotnetZexoroCommand() };
+        var config = Zexoro.Configuration.ZexoroConfig.Load(Path.Combine(_dir.FullName, "zexoro.toml"));
+        using var credential = SigningCredential.LoadPfx(Path.Combine(_dir.FullName, "cert.pfx"), "pfx-pass");
+        var result = NsisPackager.Pack(new NsisPackRequest
+        {
+            Config = config,
+            Toolset = Toolsets.BundledToolsets.ResolveNsis(environment),
+            OutputDirectory = Path.Combine(_dir.FullName, withSigning ? "signed" : "unsigned"),
+            Signing = withSigning
+                ? new NsisSigning
+                {
+                    Credential = credential,
+                    CertificatePath = Path.Combine(_dir.FullName, "cert.pfx"),
+                    Password = "pfx-pass",
+                    ZexoroCommand = environment.ZexoroCommand,
+                }
+                : null,
+            ResolveUpdater = architecture => Toolsets.BundledUpdaters.Resolve(architecture, environment),
+            KeepStaging = true,
+        });
+        Assert.NotNull(result.StagingDirectory);
+        _stagings.Add(result.StagingDirectory);
+        return result.StagingDirectory;
+    }
 }

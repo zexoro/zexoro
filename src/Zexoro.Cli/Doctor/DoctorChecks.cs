@@ -30,6 +30,7 @@ internal static class DoctorChecks
         new WindowsSigningCheck(),
         new NsisToolsetCheck(),
         new UpdaterCheck(),
+        new UpdatesCheck(),
     ];
 
     public static void Run(string configPath, string displayPath, CliEnvironment environment, DoctorReport report)
@@ -345,15 +346,41 @@ internal sealed class UpdaterCheck : IDoctorCheck
         }
 
         // Only installers with [updates] need an updater.
+        Action<string> reportProblem = config.Updates is null ? report.Warning : report.Error;
         if (missing.Count == UpdaterBinary.Architectures.Count && environment.GetVariable(UpdaterBinary.DirectoryVariable) is not { Length: > 0 })
         {
-            report.Warning($"this zexoro build has no embedded updaters; installers with [updates] need {UpdaterBinary.DirectoryVariable}");
+            reportProblem($"this zexoro build has no embedded updaters; installers with [updates] need {UpdaterBinary.DirectoryVariable}");
         }
         else
         {
             foreach (var problem in missing)
             {
-                report.Warning($"updater: {problem}");
+                reportProblem($"updater: {problem}");
+            }
+        }
+    }
+}
+
+/// <summary><c>[updates]</c>: the key files load; reports the feed URL and channel.</summary>
+internal sealed class UpdatesCheck : IDoctorCheck
+{
+    public void Run(ZexoroConfig config, CliEnvironment environment, DoctorReport report)
+    {
+        if (config.Updates is not { } updates)
+        {
+            return;
+        }
+
+        try
+        {
+            var keys = updates.ResolveKeys();
+            report.Ok($"updates: channel {updates.Channel}, feed {updates.FeedUrl.AbsoluteUri}, {keys.Count} trusted key(s)");
+        }
+        catch (ConfigurationException ex)
+        {
+            foreach (var error in ex.Errors)
+            {
+                report.Error(error.ToString());
             }
         }
     }

@@ -41,6 +41,12 @@ public sealed record NsisPackRequest
     /// <summary>Receives progress messages; null for none.</summary>
     public TextWriter? Log { get; init; }
 
+    /// <summary>
+    /// Returns the zexoro-updater for the installer's architecture; needed when the configuration has
+    /// <c>[updates]</c>. It throws <see cref="NsisException"/> when none is available.
+    /// </summary>
+    public Func<Architecture, UpdaterBinary>? ResolveUpdater { get; init; }
+
     /// <summary>Keeps the staging directory (script, staged files) for inspection instead of deleting it.</summary>
     public bool KeepStaging { get; init; }
 }
@@ -116,18 +122,42 @@ public static class NsisPackager
             throw new NsisException($"windows.license: {licensePath.FullPath} not found.");
         }
 
+        UpdaterBinary? updater = null;
+        NsisUpdates? updates = null;
+        if (config.Updates is { } updatesConfig)
+        {
+            // Both before anything is staged, so a missing updater or key file fails fast.
+            updater = request.ResolveUpdater?.Invoke(architecture)
+                ?? throw new NsisException($"[updates] is configured, but no zexoro-updater for {UpdaterBinary.RidFor(architecture)} is available.");
+            updates = new NsisUpdates(updatesConfig.Channel, updatesConfig.FeedUrl, updatesConfig.ResolveKeys());
+        }
+
         var outputDirectory = Path.GetFullPath(request.OutputDirectory);
         var staging = Directory.CreateTempSubdirectory("zexoro-nsis-").FullName;
         var keep = request.KeepStaging;
         try
         {
             var appDirectory = Path.Combine(staging, NsisInstallerSpec.AppDirectoryName);
-            var (size, emptyDirectories) = CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
+            var emptyDirectories = CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
             var signed = request.Signing is { } signing
                 ? SignApplicationFiles(appDirectory, input.Main.Value, windows.Sign, signing, config.App, request.Log)
                 : [];
 
+            // Measured after signing, as installed: zexoro-updater computes the same value from app.new.
+            var size = new DirectoryInfo(appDirectory).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
+
             File.Copy(config.App.Icon.FullPath, Path.Combine(staging, NsisInstallerSpec.IconFileName));
+            if (updater is not null)
+            {
+                request.Log?.WriteLine($"Adding {UpdaterBinary.FileName} ({updater.Source})");
+                var updaterPath = Path.Combine(staging, NsisInstallerSpec.UpdaterFileName);
+                updater.WriteTo(updaterPath);
+                if (request.Signing is { } updaterSigning)
+                {
+                    SignUpdater(updaterPath, updaterSigning, config.App, request.Log);
+                }
+            }
+
             string? license = null;
             if (windows.License is { } l)
             {
@@ -151,6 +181,7 @@ public static class NsisPackager
                 EstimatedSizeKb = (size + 1023) / 1024,
                 EmptyDirectories = emptyDirectories,
                 SignCommand = request.Signing is { } s ? WriteSignCommand(staging, s, config.App) : null,
+                Updates = updates,
             };
 
             var record = InstallRecord.Create(spec);
@@ -217,12 +248,11 @@ public static class NsisPackager
 
     /// <summary>
     /// Copies the input directory, including hidden files, skipping <paramref name="exclude"/> (the
-    /// output directory, when it lies inside the input). Returns the total size and the empty directories.
+    /// output directory, when it lies inside the input). Returns the empty directories.
     /// </summary>
-    private static (long Size, IReadOnlyList<string> EmptyDirectories) CopyDirectory(string source, string destination, string exclude)
+    private static List<string> CopyDirectory(string source, string destination, string exclude)
     {
         var options = new EnumerationOptions { RecurseSubdirectories = false, AttributesToSkip = 0, IgnoreInaccessible = false };
-        long size = 0;
         var empty = new List<string>();
         var excludePrefix = exclude.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
@@ -233,7 +263,6 @@ public static class NsisPackager
             foreach (var file in Directory.EnumerateFiles(from, "*", options).Order(StringComparer.Ordinal))
             {
                 File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
-                size += new FileInfo(file).Length;
                 any = true;
             }
 
@@ -256,7 +285,7 @@ public static class NsisPackager
         }
 
         Copy(source, destination, string.Empty);
-        return (size, empty);
+        return empty;
     }
 
     private static List<string> SignApplicationFiles(
@@ -291,6 +320,29 @@ public static class NsisPackager
         }
 
         return signed;
+    }
+
+    /// <summary>
+    /// Signs the staged updater (after <see cref="UpdaterBinary.WriteTo"/> checked its hash) with the
+    /// application's certificate, so it carries the same publisher as the files it updates. An
+    /// updater that is already signed keeps its signature, like application files.
+    /// </summary>
+    private static void SignUpdater(string path, NsisSigning signing, AppConfig app, TextWriter? log)
+    {
+        if (AuthenticodeSigner.IsSigned(path))
+        {
+            log?.WriteLine($"Skipping {UpdaterBinary.FileName}: already signed");
+            return;
+        }
+
+        log?.WriteLine($"Signing {UpdaterBinary.FileName}");
+        AuthenticodeSigner.SignFile(path, new SigningOptions
+        {
+            Credential = signing.Credential,
+            TimestampUrl = signing.Timestamp,
+            Description = app.Name,
+            DescriptionUrl = app.Url,
+        });
     }
 
     /// <summary>

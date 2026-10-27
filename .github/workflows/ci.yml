@@ -289,3 +289,13 @@ jobs:
         run: |
           & ${{ matrix.powershell }} -NoProfile -ExecutionPolicy Bypass -File tests/e2e/windows/Run-E2E.ps1 -InstallerDir e2e
           exit $LASTEXITCODE
+
+      # zexoro-updater check/download/apply against a local feed server, both scopes, plus the
+      # verification failures (docs/design/0005-nsis-updates.md section 4). Runs even when the
+      # step above failed, so both results are visible.
+      - name: Automatic updates
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & ${{ matrix.powershell }} -NoProfile -ExecutionPolicy Bypass -File tests/e2e/windows/Run-UpdateE2E.ps1 -InstallerDir e2e
+          exit $LASTEXITCODE

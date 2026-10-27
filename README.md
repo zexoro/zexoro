@@ -2,7 +2,7 @@
 
 Package applications built with any technology into native installers, and keep them up to date.
 
-> **Status:** early (0.x). zexoro builds signed Windows installers (NSIS) from an already-built application directory, on Linux, macOS or Windows. Automatic updates and other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
+> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS) from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
 
 ## Install
 
@@ -38,7 +38,7 @@ zexoro doctor    # checks the configuration, the files it names, the certificate
 zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe
 ```
 
-`zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`.
+`zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
 
 zexoro packages build output; it never builds your application. The input directory must contain the main executable, an `.exe` for x86, x64 or arm64 Windows; the installer's architecture comes from its PE header.
 
@@ -90,6 +90,28 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 | --- | --- | --- | --- |
 | `remove` | array of strings | `[]` | Extra paths the uninstaller deletes, such as user data. Each starts with `%LOCALAPPDATA%`, `%APPDATA%` or `%PROGRAMDATA%` followed by a sub-path, for example `'%LOCALAPPDATA%\Example Notes'`. |
 
+### `[updates]` (optional)
+
+Makes installers updatable: they then include `zexoro-updater.exe`, record where to look for updates, and `pack` writes a release fragment `<installer>.release.json` next to each installer for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, installers have no updater.
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `feed` | string | required | URL template of the feed. It must contain `{channel}`, so every channel has its own feed: `"https://example.com/updates/{channel}/feed.json"`. |
+| `download` | string | required | URL template of an installer: `{file}` (the installer's file name), `{version}` and `{channel}`, for example `"https://example.com/dl/{version}/{file}"`. |
+| `channel` | string | `"stable"` | The channel the installers follow: ASCII letters, digits, `.`, `-` and `_`. `pack --channel` overrides it. |
+| `keys` | array | required | The trusted public keys, at least one: the base64 text that `zexoro keys new` prints, or `{ file = "zexoro-update.pub" }`. Rotate keys by listing the new one next to the old one (a release signed with the old key ships the new list). |
+
+Both URLs must be `https`; plain `http` is accepted only for `localhost`, `127.0.0.1` and `[::1]` (testing). The private key never belongs in `zexoro.toml`: `pack` does not need it, only `zexoro feed add` does.
+
+```toml
+[updates]
+feed     = "https://example.com/updates/{channel}/feed.json"
+download = "https://example.com/dl/{version}/{file}"
+keys     = [{ file = "zexoro-update.pub" }]
+```
+
+`pack` needs a `zexoro-updater` for the installer's architecture: release builds of zexoro embed them for x86, x64 and arm64; `ZEXORO_UPDATER_DIR` overrides them (`zexoro doctor` reports which are available).
+
 ## Signing
 
 zexoro signs with Authenticode itself; `signtool` is not needed, so signing works on Linux and macOS too. With `[windows.signing]` configured, `pack` signs, in order, the application files chosen by `sign` (in a staging copy, never in your input directory), the uninstaller, and the installer.
@@ -105,25 +127,39 @@ The password reaches zexoro only through the environment; it is never written to
 
 ## What the installer does
 
-- **Location:** per-user installs go to `%LOCALAPPDATA%\Programs\<name>`, per-machine installs to `%ProgramFiles%\<name>` (`%ProgramFiles(x86)%` for x86 applications). Files live under `<root>\app\`, next to `uninstall.exe` and `zexoro-install.json`.
+- **Location:** per-user installs go to `%LOCALAPPDATA%\Programs\<name>`, per-machine installs to `%ProgramFiles%\<name>` (`%ProgramFiles(x86)%` for x86 applications). Files live under `<root>\app\`, next to `uninstall.exe`, `zexoro-install.json` and, with `[updates]`, `zexoro-updater.exe`.
 - **Installed apps:** an entry under `HKCU` or `HKLM` `...\Uninstall\<app.id>` with name, version, publisher, icon and size.
 - **Upgrade:** installing over an existing version upgrades in place, where it is installed: the old files are removed, so nothing stale remains, and there is still one entry. The same version reinstalls; an older version is refused.
 - **Running application:** the installer and uninstaller refuse to replace files while the application runs, and offer Retry/Cancel.
-- **Uninstall:** removes the files, shortcuts and entry, but keeps user data unless it is listed in `[windows.uninstall] remove`.
+- **Uninstall:** removes the files, shortcuts and entry, what an interrupted update left behind and the updater's state (`%LOCALAPPDATA%\zexoro\updater\<app.id>`), but keeps user data unless it is listed in `[windows.uninstall] remove`.
 - **Silent mode:** `/S` installs without UI; `/D=<dir>` chooses the location of a fresh install (an existing install is always upgraded where it is). The silent uninstall command is in the entry's `QuietUninstallString`.
-- **Exit codes:** `0` success, `1` cancelled, `2` aborted (unsupported Windows, or a per-machine install without administrator rights), `3` a newer version is already installed, `4` the application is running or its files are in use.
+- **Stage mode (internal):** with `[updates]`, the updater runs a per-user installer as `/S /ZEXORO_STAGE`; it then writes the new version next to the install (`app.new\` and `.new` files) without touching the registry or shortcuts, and the updater swaps it in.
+- **Exit codes:** `0` success, `1` cancelled, `2` aborted (unsupported Windows, a per-machine install without administrator rights, or a refused stage mode), `3` a newer version is already installed, `4` the application is running or its files are in use.
 
-## Update keys and feeds (preview)
+## Automatic updates
 
-Automatic updates are being built (see [design 0005](docs/design/0005-nsis-updates.md)); installers do not include the updater yet. The signing side already works:
+Installers packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured) and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
-zexoro keys new                     # zexoro-update.key.pem (private) and zexoro-update.pub
-zexoro feed add --feed feed.json --key zexoro-update.key.pem <fragment.release.json>...
+zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
+zexoro pack                         # installer + <installer>.release.json
+zexoro feed add --feed feed.json --key zexoro-update.key.pem dist/*.release.json
 zexoro feed verify --public-key zexoro-update.pub feed.json
 ```
 
-`feed add` merges release fragments into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one. Keep the private key out of the repository and back it up: if every trusted private key is lost, installed copies can no longer be updated automatically.
+Upload the installers to the `download` URL first, then `feed.json` and `feed.json.sig` to the `feed` URL. `feed add` merges release fragments (packed on any number of hosts) into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text, for CI secrets); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one.
+
+> **Keep the private key out of the repository and back it up.** Installed copies trust only the keys listed in `[updates] keys`; if every trusted private key is lost, they can no longer be updated automatically and users must reinstall by hand.
+
+Your application drives the installed updater, `<install root>\zexoro-updater.exe`:
+
+```
+zexoro-updater check    [--json]                       # 0 update available, 1 up to date
+zexoro-updater download [--json]                       # downloads and verifies the update
+zexoro-updater apply --wait-pid <pid> [--restart] [--json]
+```
+
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in; per-machine installs run the new installer, which asks for elevation. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed, `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json`.
 
 ## zexoro exit codes
 
@@ -135,6 +171,7 @@ zexoro feed verify --public-key zexoro-update.pub feed.json
 | --- | --- |
 | `ZEXORO_CACHE_DIR` | Where the bundled toolset is extracted. Default: `%LOCALAPPDATA%\zexoro`, `~/Library/Caches/zexoro` or `$XDG_CACHE_HOME/zexoro`. |
 | `ZEXORO_NSIS_DIR` | Use this NSIS directory instead of the bundled one (development). |
+| `ZEXORO_UPDATER_DIR` | A directory with `zexoro-updater-win-<arch>.exe` files to put into installers instead of the embedded ones (development). |
 
 ## GitHub Actions
 

@@ -48,6 +48,7 @@ public sealed class ApplyTests : IDisposable
         Assert.Equal("wait 77", Processes.Log[0]);
         Assert.StartsWith("run zexoro-updater.exe apply --from-root " + Root + " --restart --json", Processes.Log[1], StringComparison.Ordinal);
         Assert.Equal("run Notes-2.0.0-win-x64.exe /S /ZEXORO_STAGE", Processes.Log[2]);
+        Assert.Equal(Root, Processes.InstallerEnvironment?[NsisScript.StageRootVariable]);
         var started = Assert.Single(Processes.Started);
         Assert.Equal(Path.Combine(Root, "app", "Notes.exe"), started.Path);
 

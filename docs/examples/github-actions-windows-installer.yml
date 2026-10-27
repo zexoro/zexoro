@@ -14,6 +14,12 @@
 #   SIGN_CERT_PASSWORD    its password
 # Without them the installer is built unsigned (remove [windows.signing] from zexoro.toml).
 #
+# Automatic updates (optional): with [updates] in zexoro.toml, pack also writes a release fragment
+# next to the installer. With the secret ZEXORO_UPDATE_KEY (the PEM text of the key from
+# `zexoro keys new`) and the repository variable FEED_URL (the published feed.json of the channel),
+# the workflow adds the release to that feed and uploads feed.json and feed.json.sig with the
+# installer. Publish the installer first, then the feed files.
+#
 # Pushing a tag such as v1.2.3 builds the installer for version 1.2.3.
 
 name: Windows installer
@@ -81,8 +87,35 @@ jobs:
           zexoro doctor
           zexoro pack ${{ steps.version.outputs.args }}
 
+      - name: Add the release to the update feed
+        if: ${{ vars.FEED_URL != '' }}
+        shell: bash
+        env:
+          ZEXORO_UPDATE_KEY: ${{ secrets.ZEXORO_UPDATE_KEY }}
+          FEED_URL: ${{ vars.FEED_URL }}
+        run: |
+          set -euo pipefail
+          # The first release starts a new feed (404); later ones extend the published one, after
+          # checking its signature with the public key committed next to zexoro.toml. Any other
+          # failure stops: a new feed would restart the sequence, which installed copies reject.
+          status=$(curl -sSL --retry 5 -o dist/feed.json -w '%{http_code}' "$FEED_URL")
+          if [ "$status" = 200 ]; then
+            curl -fsSL --retry 5 -o dist/feed.json.sig "$FEED_URL.sig"
+            zexoro feed verify --public-key zexoro-update.pub dist/feed.json
+          elif [ "$status" = 404 ]; then
+            rm -f dist/feed.json
+          else
+            echo "cannot download $FEED_URL (HTTP $status)" >&2
+            exit 1
+          fi
+          zexoro feed add --feed dist/feed.json dist/*.release.json
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: dist/*.exe
+          path: |
+            dist/*.exe
+            dist/*.release.json
+            dist/feed.json
+            dist/feed.json.sig
           if-no-files-found: error
