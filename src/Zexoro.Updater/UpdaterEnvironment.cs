@@ -8,10 +8,14 @@ internal sealed record UpdaterEnvironment
 
     public required int ProcessId { get; init; }
 
-    /// <summary><c>%LOCALAPPDATA%</c>, under which the per-user state lives.</summary>
-    public required string LocalAppData { get; init; }
+    /// <summary>
+    /// The directory under which the per-user state lives (in <c>zexoro/updater/&lt;app.id&gt;</c>):
+    /// <c>%LOCALAPPDATA%</c> on Windows, <c>$XDG_STATE_HOME</c> (default <c>~/.local/state</c>) on
+    /// Linux, <c>~/Library/Application Support</c> on macOS. See <see cref="StateBaseFor"/>.
+    /// </summary>
+    public required string StateBase { get; init; }
 
-    /// <summary><c>%TEMP%</c>, where apply copies the updater before running it.</summary>
+    /// <summary><c>%TEMP%</c> or <c>$TMPDIR</c>, where apply copies the updater before running it.</summary>
     public required string TempDirectory { get; init; }
 
     public required IProcessHost Processes { get; init; }
@@ -29,14 +33,32 @@ internal sealed record UpdaterEnvironment
     /// <summary>The install root: the directory of this updater, unless <c>apply --from-root</c> names it.</summary>
     public string DefaultRoot => Path.GetDirectoryName(ExecutablePath)!;
 
+    /// <summary>
+    /// The state base directory of <paramref name="system"/> (docs/design/0006-desktop-formats.md
+    /// section 2): <c>%LOCALAPPDATA%</c> on Windows; on Linux <c>$XDG_STATE_HOME</c> when it is an
+    /// absolute path (the XDG Base Directory specification says to ignore relative ones), otherwise
+    /// <c>~/.local/state</c>; on macOS <c>~/Library/Application Support</c>.
+    /// </summary>
+    internal static string StateBaseFor(HostSystem system, Func<string, string?> getVariable, string home, string localAppData) => system switch
+    {
+        HostSystem.Windows => localAppData,
+        HostSystem.MacOS => Path.Combine(home, "Library", "Application Support"),
+        _ => getVariable("XDG_STATE_HOME") is { Length: > 0 } state && Path.IsPathRooted(state) ? state : Path.Combine(home, ".local", "state"),
+    };
+
     public static UpdaterEnvironment System()
     {
-        var path = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, "zexoro-updater.exe");
+        var path = Environment.ProcessPath ?? Path.Combine(AppContext.BaseDirectory, OperatingSystem.IsWindows() ? "zexoro-updater.exe" : "zexoro-updater");
+        var system = OperatingSystem.IsWindows() ? HostSystem.Windows : OperatingSystem.IsMacOS() ? HostSystem.MacOS : HostSystem.Linux;
         return new UpdaterEnvironment
         {
             ExecutablePath = path,
             ProcessId = Environment.ProcessId,
-            LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify),
+            StateBase = StateBaseFor(
+                system,
+                Environment.GetEnvironmentVariable,
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile, Environment.SpecialFolderOption.DoNotVerify),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify)),
             TempDirectory = Path.GetTempPath(),
             Processes = new SystemProcessHost(),
             Registry = OperatingSystem.IsWindows() ? new WindowsUninstallRegistry() : new UnsupportedRegistry(),
@@ -48,6 +70,14 @@ internal sealed record UpdaterEnvironment
             },
         };
     }
+}
+
+/// <summary>The operating systems whose conventions the updater follows.</summary>
+internal enum HostSystem
+{
+    Windows,
+    Linux,
+    MacOS,
 }
 
 internal static class UpdaterVersion

@@ -213,7 +213,7 @@ public sealed class CommandTests : IDisposable
 
         Assert.Empty(Lines(Stdout, "error"));
         Assert.Equal(["warning  [windows.signing] is not configured; installers will be unsigned"], Lines(Stdout, "warning"));
-        Assert.Equal(9, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, target, icon, NSIS toolset, 3 updaters
+        Assert.Equal(15, Lines(Stdout, "ok").Length); // configuration, input.dir, input.main, target, icon, NSIS toolset, 9 updaters
         Assert.Contains("ok       target win-x64 (input.main: a Windows x64 executable (PE)); formats: nsis", Stdout, StringComparison.Ordinal);
         Assert.Contains("0 errors, 1 warning.", Stdout, StringComparison.Ordinal);
     }
@@ -239,9 +239,9 @@ public sealed class CommandTests : IDisposable
     {
         WriteProject();
         Assert.Equal(ExitCodes.Success, Run("doctor"));
-        foreach (var rid in new[] { "win-x86", "win-x64", "win-arm64" })
+        foreach (var runtime in Zexoro.Platforms.UpdaterRuntime.All)
         {
-            Assert.Contains($"ok       updater for {rid} from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
+            Assert.Contains($"ok       updater for {runtime.Rid} from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
         }
     }
 
@@ -253,7 +253,7 @@ public sealed class CommandTests : IDisposable
         Assert.Equal(ExitCodes.Success, Run("doctor"));
 
         // CI builds embed the updaters; local builds usually do not.
-        const string Warning = "warning  this zexoro build has no embedded updaters; installers with [updates] need ZEXORO_UPDATER_DIR";
+        const string Warning = "warning  this zexoro build has no embedded updaters; packages with [updates] need ZEXORO_UPDATER_DIR";
         if (BundledUpdaters.FindEmbedded(Zexoro.Platforms.Architecture.X64) is null)
         {
             Assert.Contains(Warning, Lines(Stdout, "warning"));
@@ -264,6 +264,16 @@ public sealed class CommandTests : IDisposable
             Assert.DoesNotContain(Warning, Lines(Stdout, "warning"));
             Assert.Single(Lines(Stdout, "warning"));
         }
+    }
+
+    [Fact]
+    public void Doctor_IgnoresAMissingUpdaterForAnotherOperatingSystem()
+    {
+        WriteProject();
+        File.Delete(Path.Combine(_variables["ZEXORO_UPDATER_DIR"], "zexoro-updater-linux-musl-x64"));
+        Assert.Equal(ExitCodes.Success, Run("doctor"));
+        Assert.DoesNotContain("linux-musl-x64", Stdout, StringComparison.Ordinal);
+        Assert.Contains("ok       updater for linux-x64 from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
     }
 
     [Fact]

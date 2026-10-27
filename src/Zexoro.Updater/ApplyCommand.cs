@@ -12,13 +12,16 @@ internal sealed record ApplyOptions(int? WaitPid, bool Restart, bool Json, strin
 
 /// <summary>
 /// <c>apply</c> (docs/design/0005-nsis-updates.md section 3). The updater in the install root checks
-/// the staged installer, waits for the application, copies itself to <c>%TEMP%</c> and hands off to
-/// that copy (<c>apply --from-root</c>), which runs the installer: in stage mode followed by a rename
-/// swap for <c>replace</c>, or through <c>ShellExecute</c> for <c>reinstall</c>. A portable zip
-/// (<c>replace</c>, format <c>zip</c>) is extracted instead of run (docs/design/0006-desktop-formats.md).
+/// the staged installer, waits for the application, copies itself to <c>%TEMP%</c> (<c>$TMPDIR</c>
+/// on Unix, in a directory only the user can enter) and hands off to that copy
+/// (<c>apply --from-root</c>), which runs the installer: in stage mode followed by a rename swap for
+/// <c>replace</c>, or through <c>ShellExecute</c> for <c>reinstall</c>. A portable archive
+/// (<c>replace</c>, format <c>zip</c> or <c>tar.gz</c>) is extracted instead of run
+/// (docs/design/0006-desktop-formats.md).
 /// </summary>
 internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter log)
 {
+    /// <summary>The updater's file name in a Windows install (NSIS, zip).</summary>
     public const string UpdaterFileName = "zexoro-updater.exe";
     public const string CopyDirectoryPrefix = "zexoro-updater-";
     public const string ReplaceStrategy = "replace";
@@ -26,6 +29,20 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
 
     /// <summary>The record format of a portable zip, updated by extracting the next archive (docs/design/0006-desktop-formats.md).</summary>
     public const string ZipFormat = "zip";
+
+    /// <summary>
+    /// The record and feed format of a portable tar.gz (Linux), updated like a zip but keeping Unix
+    /// modes and symbolic links. Not <c>tar.gz</c>: feed tokens allow no '.', and updaters up to
+    /// 0.2.0 reject a whole feed with such a token, which would stop the updates of every other
+    /// platform sharing the feed.
+    /// </summary>
+    public const string TarGzFormat = "tar-gz";
+
+    /// <summary>On Unix, copies left in the shared temporary directory are removed only once they are this old.</summary>
+    internal static readonly TimeSpan UnixCopyMaxAge = TimeSpan.FromHours(1);
+
+    /// <summary>The temporary copy's directory and file: readable, writable and executable by the user only.</summary>
+    private const UnixFileMode PrivateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     /// <summary>Exit code of an installer that found a newer version installed (NsisScript).</summary>
     public const int InstallerNewerVersionInstalled = 3;
@@ -44,7 +61,7 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
             return UpdaterResult.Fail(UpdaterExitCodes.For(ex.Kind), ex.Message);
         }
 
-        var state = new UpdaterState(environment.LocalAppData, record.App);
+        var state = new UpdaterState(environment.StateBase, record.App);
         var result = options.FromRoot is null ? HandOff(root, record, state, options) : Apply(root, record, state, options);
         if (!result.Relayed)
         {
@@ -96,9 +113,23 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         try
         {
             var directory = Path.Combine(environment.TempDirectory, CopyDirectoryPrefix + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(directory);
-            copy = Path.Combine(directory, UpdaterFileName);
-            File.Copy(environment.ExecutablePath, copy);
+
+            // The copy keeps this executable's name (zexoro-updater.exe on Windows, zexoro-updater
+            // elsewhere). On Unix the temporary directory is usually shared, so the copy lives in a
+            // fresh directory only this user can enter, and nobody else can swap the program run next.
+            copy = Path.Combine(directory, Path.GetFileName(environment.ExecutablePath));
+            if (OperatingSystem.IsWindows())
+            {
+                Directory.CreateDirectory(directory);
+                File.Copy(environment.ExecutablePath, copy);
+            }
+            else
+            {
+                Directory.CreateDirectory(directory, PrivateMode);
+                File.SetUnixFileMode(directory, PrivateMode);
+                File.Copy(environment.ExecutablePath, copy);
+                File.SetUnixFileMode(copy, PrivateMode);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -181,7 +212,7 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
 
             result = record.Strategy switch
             {
-                ReplaceStrategy when record.Target.Format == ZipFormat => ReplaceFromArchive(root, record, staged, locked, options.Restart),
+                ReplaceStrategy when record.Target.Format is ZipFormat or TarGzFormat => ReplaceFromArchive(root, record, staged, locked, options.Restart),
                 ReplaceStrategy => Replace(root, record, staged, installer, options.Restart),
                 ReinstallStrategy => Reinstall(root, record, staged, installer, options.Restart, movedUpdater: null),
                 _ => UpdaterResult.Fail(UpdaterExitCodes.ManualUpdateNeeded, $"this updater cannot apply updates with the '{record.Strategy}' strategy; update manually", installed),
@@ -331,7 +362,7 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
     }
 
     /// <summary>
-    /// <c>replace</c> for a portable zip: extracts the verified archive into <c>app.new</c> and the
+    /// <c>replace</c> for a portable zip or tar.gz: extracts the verified archive into <c>app.new</c> and the
     /// <c>.new</c> root files, checks the staged record, then swaps by rename. Nothing is registered,
     /// so nothing else is written; a changed <c>main</c> is fine, as there are no shortcuts.
     /// </summary>
@@ -355,7 +386,7 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         log.WriteLine($"Extracting {record.App} {staged.Version} into {root}");
         try
         {
-            ArchiveStaging.Extract(archive, root);
+            ArchiveStaging.Extract(archive, root, record.Target.Format);
         }
         catch (InvalidArchiveException ex)
         {
@@ -616,7 +647,12 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         }
     }
 
-    /// <summary>Removes copies left in %TEMP% by earlier runs; those still running stay.</summary>
+    /// <summary>
+    /// Removes copies left in %TEMP% by earlier runs. On Windows those still running stay, as their
+    /// files cannot be deleted. Unix deletes running programs without complaint, so there only copies
+    /// older than <see cref="UnixCopyMaxAge"/> are removed: a concurrent apply of another application
+    /// may have just created its copy and not started it yet.
+    /// </summary>
     private void DeleteOldCopies()
     {
         try
@@ -625,6 +661,11 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
             {
                 try
                 {
+                    if (!OperatingSystem.IsWindows() && DateTime.UtcNow - Directory.GetLastWriteTimeUtc(directory) < UnixCopyMaxAge)
+                    {
+                        continue;
+                    }
+
                     Directory.Delete(directory, recursive: true);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

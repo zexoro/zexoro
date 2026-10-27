@@ -5,15 +5,15 @@ using Zexoro.Versioning;
 namespace Zexoro.Updater;
 
 /// <summary>
-/// The updater's per-user state for one application: <c>%LOCALAPPDATA%\zexoro\updater\&lt;app.id&gt;\</c>
-/// with <c>state.json</c> (accepted feed sequences), <c>downloads\</c> (the verified artifact and
+/// The updater's per-user state for one application: <c>&lt;base&gt;/zexoro/updater/&lt;app.id&gt;/</c>,
+/// where the base is <see cref="UpdaterEnvironment.StateBase"/> (<c>%LOCALAPPDATA%</c> on Windows), with <c>state.json</c> (accepted feed sequences), <c>downloads\</c> (the verified artifact and
 /// <c>staged.json</c> describing it) and <c>last-apply.json</c> (the result of the last apply).
 /// </summary>
 internal sealed class UpdaterState
 {
-    public UpdaterState(string localAppData, string app)
+    public UpdaterState(string stateBase, string app)
     {
-        Directory = Path.Combine(localAppData, "zexoro", "updater", app);
+        Directory = Path.Combine(stateBase, "zexoro", "updater", app);
     }
 
     public string Directory { get; }

@@ -17,7 +17,7 @@ public sealed record UpdaterBinary(Architecture Architecture, string Source, str
     public const string FileName = "zexoro-updater.exe";
 
     /// <summary>Points zexoro at a directory with <c>zexoro-updater-&lt;rid&gt;.exe</c> files, overriding the embedded ones.</summary>
-    public const string DirectoryVariable = "ZEXORO_UPDATER_DIR";
+    public const string DirectoryVariable = UpdaterRuntime.DirectoryVariable;
 
     /// <summary>The architectures an updater is built for.</summary>
     public static IReadOnlyList<Architecture> Architectures { get; } = [Architecture.X86, Architecture.X64, Architecture.Arm64];
@@ -25,10 +25,13 @@ public sealed record UpdaterBinary(Architecture Architecture, string Source, str
     /// <summary>The runtime identifier, e.g. <c>win-x64</c>.</summary>
     public string Rid => RidFor(Architecture);
 
-    public static string RidFor(Architecture architecture) => "win-" + architecture.Name;
+    public static string RidFor(Architecture architecture) => RuntimeFor(architecture)?.Rid ?? "win-" + architecture.Name;
+
+    /// <summary>The Windows updater build for <paramref name="architecture"/>, or null when there is none.</summary>
+    public static UpdaterRuntime? RuntimeFor(Architecture architecture) => UpdaterRuntime.Find(new TargetPlatform(OperatingSystemFamily.Windows, architecture));
 
     /// <summary>The file name in a directory of updaters (<see cref="DirectoryVariable"/>, the build's <c>ZexoroUpdaterDir</c>).</summary>
-    public static string FileNameFor(Architecture architecture) => $"zexoro-updater-{RidFor(architecture)}.exe";
+    public static string FileNameFor(Architecture architecture) => RuntimeFor(architecture)?.DirectoryFileName ?? $"zexoro-updater-{RidFor(architecture)}.exe";
 
     /// <summary>
     /// Writes the updater to <paramref name="path"/>, checking its SHA-256 and that it is a Windows

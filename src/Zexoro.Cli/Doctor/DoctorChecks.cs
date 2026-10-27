@@ -400,46 +400,47 @@ internal sealed class NsisToolsetCheck : IDoctorCheck
     }
 }
 
-/// <summary>An updater is available for every Windows architecture (embedded or from ZEXORO_UPDATER_DIR).</summary>
+/// <summary>
+/// Reports every zexoro-updater build that is available (embedded or from ZEXORO_UPDATER_DIR); a
+/// missing one is a problem only for an operating system the configuration targets.
+/// </summary>
 internal sealed class UpdaterCheck : IDoctorCheck
 {
     public void Run(DoctorContext context, DoctorReport report)
     {
         var config = context.Config;
         var environment = context.Environment;
-        if (!context.Targets(OperatingSystemFamily.Windows))
-        {
-            return;
-        }
-
-        var missing = new List<string>();
-        foreach (var architecture in UpdaterBinary.Architectures)
+        var fromDirectory = environment.GetVariable(UpdaterRuntime.DirectoryVariable) is { Length: > 0 };
+        var missing = new List<(UpdaterRuntime Runtime, string Problem)>();
+        foreach (var runtime in UpdaterRuntime.All)
         {
             try
             {
-                var updater = BundledUpdaters.Resolve(architecture, environment);
+                var updater = BundledUpdaters.Resolve(runtime, environment);
                 report.Ok($"{updater.Source} (sha256 {updater.Sha256})");
             }
-            catch (Exception ex) when (ex is NsisException or IOException or UnauthorizedAccessException)
+            catch (Exception ex) when (ex is UpdaterUnavailableException or IOException or UnauthorizedAccessException)
             {
-                missing.Add(environment.GetVariable(UpdaterBinary.DirectoryVariable) is { Length: > 0 }
-                    ? ex.Message
-                    : $"this zexoro build has no embedded updater for {UpdaterBinary.RidFor(architecture)}");
+                missing.Add((runtime, fromDirectory ? ex.Message : $"this zexoro build has no embedded updater for {runtime.Rid}"));
             }
         }
 
-        // Only installers with [updates] need an updater.
+        // Only packages with [updates] need an updater.
         Action<string> reportProblem = config.Updates is null ? report.Warning : report.Error;
-        if (missing.Count == UpdaterBinary.Architectures.Count && environment.GetVariable(UpdaterBinary.DirectoryVariable) is not { Length: > 0 })
+        var relevant = missing.Where(m => context.Targets(m.Runtime.Platform.OperatingSystem)).ToList();
+        if (!fromDirectory && missing.Count == UpdaterRuntime.All.Count)
         {
-            reportProblem($"this zexoro build has no embedded updaters; installers with [updates] need {UpdaterBinary.DirectoryVariable}");
-        }
-        else
-        {
-            foreach (var problem in missing)
+            if (relevant.Count > 0)
             {
-                reportProblem($"updater: {problem}");
+                reportProblem($"this zexoro build has no embedded updaters; packages with [updates] need {UpdaterRuntime.DirectoryVariable}");
             }
+
+            return;
+        }
+
+        foreach (var (_, problem) in relevant)
+        {
+            reportProblem($"updater: {problem}");
         }
     }
 }
