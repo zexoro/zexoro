@@ -196,7 +196,10 @@ internal sealed class FakeProcesses(TestInstall install) : IProcessHost
         return !Running.Contains(processId);
     }
 
-    public int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory)
+    /// <summary>The environment the last installer run got.</summary>
+    public IReadOnlyDictionary<string, string>? InstallerEnvironment { get; private set; }
+
+    public int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string>? environment = null)
     {
         Log.Add($"run {Path.GetFileName(path)} {string.Join(' ', arguments)}");
         if (Path.GetFileName(path) == "zexoro-updater.exe")
@@ -211,6 +214,7 @@ internal sealed class FakeProcesses(TestInstall install) : IProcessHost
             Assert.Throws<IOException>(() => new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite).Dispose());
         }
 
+        InstallerEnvironment = environment;
         return Installer(arguments);
     }
 

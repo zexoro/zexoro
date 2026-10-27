@@ -222,8 +222,7 @@ internal static class FeedRules
     }
 
     /// <summary>A channel names a feed and appears in URLs: ASCII letters, digits, '.', '-' and '_'.</summary>
-    public static bool IsValidChannel(string channel) =>
-        channel.Length > 0 && channel.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or '_') && channel[0] != '.';
+    public static bool IsValidChannel(string channel) => UpdateRules.IsValidChannel(channel);
 
     public static void RequireChannel(string channel)
     {

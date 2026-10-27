@@ -1,7 +1,9 @@
 <#
 .SYNOPSIS
   End-to-end test of zexoro's NSIS installers: install, upgrade, downgrade refusal, running-app
-  refusal and uninstall, for the per-user and the per-machine scope.
+  refusal, stage mode (/ZEXORO_STAGE, used by zexoro-updater) and uninstall, for the per-user and
+  the per-machine scope. The installers are built with [updates]; the update round trip itself is
+  tested by Run-UpdateE2E.ps1.
 
 .DESCRIPTION
   Consumes the output of tests/e2e/pack.sh (any pack host). Runs in Windows PowerShell 5.1 and
@@ -12,7 +14,7 @@
   behind, also after a failure.
 
 .PARAMETER InstallerDir
-  Directory written by tests/e2e/pack.sh: user\, machine\, unsigned\ and root.cer.
+  Directory written by tests/e2e/pack.sh: user\, machine\, unsigned\, root.cer and zexoro-update.pub.
 
 .PARAMETER Scope
   Scopes to test (default: both).
@@ -34,6 +36,7 @@ $script:Passed = 0
 $script:Failed = 0
 $UninstallPath = 'Software\Microsoft\Windows\CurrentVersion\Uninstall'
 $DataDir = Join-Path $env:LOCALAPPDATA 'ZexoroE2E'
+$StageRootVariable = 'ZEXORO_UPDATE_ROOT'
 
 function Write-Pass([string]$Message) { $script:Passed++; Write-Host "PASS  $Message" -ForegroundColor Green }
 function Write-Fail([string]$Message) { $script:Failed++; Write-Host "FAIL  $Message" -ForegroundColor Red }
@@ -181,7 +184,14 @@ function Test-Installed($App, [string]$Version, [string]$RootSubject) {
             scope = $App.Scope; strategy = $(if ($App.Scope -eq 'user') { 'replace' } else { 'reinstall' })
         }
         foreach ($name in $expected.Keys) { Test-Equal $record.$name $expected[$name] "zexoro-install.json $name" }
+        Test-Equal $record.channel 'stable' 'zexoro-install.json channel'
+        Test-Equal $record.feed "http://localhost:8080/$($App.Scope)/stable/feed.json" 'zexoro-install.json feed'
+        Test-Equal (@($record.keys) -join ',') $script:UpdateKey 'zexoro-install.json keys'
+        Test-Equal $record.main 'FixtureApp.exe' 'zexoro-install.json main'
     }
+    [void](Test-That (Test-Path -LiteralPath (Join-Path $App.Root 'zexoro-updater.exe')) 'zexoro-updater.exe exists')
+    $leftovers = @(Get-ChildItem -LiteralPath $App.Root -Force | Where-Object { $_.Name -match '\.(new|old)$' } | ForEach-Object { $_.Name })
+    [void](Test-That ($leftovers.Count -eq 0) 'no .new or .old files in the install root' ($leftovers -join ', '))
 
     $entry = Get-UninstallEntry $App
     Assert-That ($null -ne $entry) "uninstall key $($App.Hive)\$UninstallPath\$($App.Id) exists"
@@ -212,6 +222,53 @@ function Test-Installed($App, [string]$Version, [string]$RootSubject) {
     return $entry
 }
 
+# Runs an installer in stage mode with ZEXORO_UPDATE_ROOT set to $Root ($null: unset), as zexoro-updater does.
+function Invoke-Stage([string]$Installer, $Root) {
+    $previous = [Environment]::GetEnvironmentVariable($StageRootVariable)
+    [Environment]::SetEnvironmentVariable($StageRootVariable, $Root)
+    try { return Invoke-Program $Installer @('/S', '/ZEXORO_STAGE') }
+    finally { [Environment]::SetEnvironmentVariable($StageRootVariable, $previous) }
+}
+
+function Get-StagedItems($App) {
+    return @(Get-ChildItem -LiteralPath $App.Root -Force | Where-Object { $_.Name -match '\.new$' } | ForEach-Object { $_.Name } | Sort-Object)
+}
+
+# Stage mode next to an installed 1.0.0: refused without or with a wrong root, then writes only app.new and the .new files.
+function Test-Stage($App, $Before) {
+    Write-Host '-- stage mode (/S /ZEXORO_STAGE)'
+    $installer = $App.Installer['2.0.0']
+    if ($App.Scope -eq 'machine') {
+        Test-Equal (Invoke-Stage $installer $App.Root) 2 'a per-machine installer refuses stage mode (exit 2)'
+        Test-Equal ((Get-StagedItems $App) -join ', ') '' 'nothing was staged'
+        return
+    }
+
+    Test-Equal (Invoke-Stage $installer $null) 2 "stage mode without $StageRootVariable exits with 2"
+    Test-Equal (Invoke-Stage $installer (Join-Path $env:TEMP 'not-the-install')) 2 "stage mode with another $StageRootVariable exits with 2"
+    Test-Equal ((Get-StagedItems $App) -join ', ') '' 'nothing was staged by the refused runs'
+
+    # Another case and a trailing backslash still name the install root.
+    Test-Equal (Invoke-Stage $installer ($App.Root.ToUpperInvariant() + '\')) 0 'stage mode for the install root exits with 0'
+    Test-Equal ((Get-StagedItems $App) -join ', ') 'app.new, uninstall.exe.new, zexoro-install.json.new, zexoro-updater.exe.new' 'stage mode wrote app.new and the .new root files'
+    $staged = Join-Path $App.Root 'app.new'
+    [void](Test-That (Test-Path -LiteralPath (Join-Path $staged 'FixtureApp.exe')) 'app.new\FixtureApp.exe exists')
+    if (Test-Path -LiteralPath (Join-Path $staged 'version.txt')) {
+        Test-Equal (Get-Content -LiteralPath (Join-Path $staged 'version.txt') -Raw).Trim() '2.0.0' 'app.new\version.txt is 2.0.0'
+    } else { Write-Fail 'app.new\version.txt exists' }
+    [void](Test-That (-not (Test-Path -LiteralPath (Join-Path $staged 'obsolete.txt'))) 'app.new has no obsolete.txt')
+    $record = Get-Content -LiteralPath (Join-Path $App.Root 'zexoro-install.json.new') -Raw | ConvertFrom-Json
+    Test-Equal $record.version '2.0.0' 'zexoro-install.json.new version'
+    Test-Equal $record.main 'FixtureApp.exe' 'zexoro-install.json.new main'
+    $current = Get-Content -LiteralPath (Join-Path $App.Root 'zexoro-install.json') -Raw | ConvertFrom-Json
+    Test-Equal $current.version '1.0.0' 'zexoro-install.json is still 1.0.0'
+    Test-Equal (Get-Content -LiteralPath (Join-Path $App.Root 'app\version.txt') -Raw).Trim() '1.0.0' 'app\version.txt is still 1.0.0'
+    $entry = Get-UninstallEntry $App
+    Test-Equal $entry['DisplayVersion'] '1.0.0' 'stage mode left DisplayVersion alone'
+    Test-Equal $entry['ZexoroVersionOrder'] $Before['ZexoroVersionOrder'] 'stage mode left ZexoroVersionOrder alone'
+    Test-Equal (Get-ShortcutTarget $App.Shortcut) (Join-Path $App.Root 'app\FixtureApp.exe') 'stage mode left the shortcut alone'
+}
+
 function Test-Scope([string]$ScopeName, [string]$RootSubject) {
     $title = $ScopeName.Substring(0, 1).ToUpperInvariant() + $ScopeName.Substring(1)
     $name = "Zexoro E2E $title"
@@ -240,7 +297,9 @@ function Test-Scope([string]$ScopeName, [string]$RootSubject) {
         $v1 = Test-Installed $app '1.0.0' $RootSubject
         [void](Test-That (Test-Path -LiteralPath (Join-Path $app.Root 'app\obsolete.txt')) 'app\obsolete.txt exists in 1.0.0')
 
-        Write-Host '-- upgrade to 2.0.0'
+        Test-Stage $app $v1
+
+        Write-Host '-- upgrade to 2.0.0 (also removes what stage mode left)'
         Assert-That ((Invoke-Program $app.Installer['2.0.0'] @('/S')) -eq 0) 'installer 2.0.0 /S exits with 0'
         $v2 = Test-Installed $app '2.0.0' $RootSubject
         [void](Test-That (-not (Test-Path -LiteralPath (Join-Path $app.Root 'app\obsolete.txt'))) 'app\obsolete.txt is gone after the upgrade')
@@ -265,10 +324,18 @@ function Test-Scope([string]$ScopeName, [string]$RootSubject) {
 
         Write-Host '-- uninstall'
         Assert-That (Test-Path -LiteralPath (Join-Path $DataDir 'cache\cache.txt')) 'the app wrote %LOCALAPPDATA%\ZexoroE2E\cache before the uninstall'
+        # What an interrupted update leaves, and the updater's state: the uninstaller removes both.
+        New-Item -ItemType Directory -Force -Path (Join-Path $app.Root 'app.new') | Out-Null
+        Set-Content -LiteralPath (Join-Path $app.Root 'app.new\leftover.txt') -Value 'x'
+        foreach ($name in 'zexoro-updater.exe.old', 'zexoro-install.json.new', 'uninstall.exe.old') { Set-Content -LiteralPath (Join-Path $app.Root $name) -Value 'x' }
+        $state = Join-Path $env:LOCALAPPDATA "zexoro\updater\$($app.Id)"
+        New-Item -ItemType Directory -Force -Path (Join-Path $state 'downloads') | Out-Null
+        Set-Content -LiteralPath (Join-Path $state 'state.json') -Value '{}'
         [void](Test-That (Invoke-QuietUninstall $app) 'QuietUninstallString removed the key and the root')
         [void](Test-That ($null -eq (Get-UninstallEntry $app)) 'uninstall key is gone')
         [void](Test-That (@(Get-MatchingUninstallKeys $app).Count -eq 0) 'no uninstall entry is left in any hive')
-        [void](Test-That (-not (Test-Path -LiteralPath $app.Root)) "install root $($app.Root) is gone")
+        [void](Test-That (-not (Test-Path -LiteralPath $app.Root)) "install root $($app.Root) is gone (with the update leftovers)")
+        [void](Test-That (-not (Test-Path -LiteralPath $state)) "the updater state $state is gone")
         [void](Test-That (-not (Test-Path -LiteralPath $app.Shortcut)) 'Start menu shortcut is gone')
         [void](Test-That (Test-Path -LiteralPath (Join-Path $DataDir 'ran.txt')) 'user data (%LOCALAPPDATA%\ZexoroE2E\ran.txt) is kept')
         [void](Test-That (-not (Test-Path -LiteralPath (Join-Path $DataDir 'cache'))) '[windows.uninstall] remove deleted %LOCALAPPDATA%\ZexoroE2E\cache')
@@ -288,6 +355,7 @@ if (-not $isAdmin) {
 
 $InstallerDir = (Resolve-Path -LiteralPath $InstallerDir).Path
 Write-Host "Installers: $InstallerDir"
+$script:UpdateKey = (Get-Content -LiteralPath (Join-Path $InstallerDir 'zexoro-update.pub') -Raw).Trim()
 
 # Trust the throwaway root that issued the signing certificate for the duration of the test.
 $certificate = $null

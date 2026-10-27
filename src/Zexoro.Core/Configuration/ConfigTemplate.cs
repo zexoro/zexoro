@@ -38,5 +38,11 @@ public static class ConfigTemplate
         # [windows.uninstall]
         # remove = ['%LOCALAPPDATA%\My App']  # extra paths to delete; user data is kept otherwise
 
+        # [updates]                          # optional; installers then include zexoro-updater
+        # feed     = "https://example.com/updates/{channel}/feed.json"
+        # download = "https://example.com/dl/{file}"     # also {version} and {channel}
+        # channel  = "stable"                            # `zexoro pack --channel beta` overrides it
+        # keys     = [{ file = "zexoro-update.pub" }]    # from `zexoro keys new`; or the base64 text
+
         """;
 }
