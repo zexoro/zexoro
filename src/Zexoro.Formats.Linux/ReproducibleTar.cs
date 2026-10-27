@@ -64,7 +64,18 @@ public static class ReproducibleTar
     /// </summary>
     /// <exception cref="ArgumentException">A name is empty, absolute, contains '\', '.' or '..' segments, or occurs twice.</exception>
     /// <exception cref="IOException">A file cannot be read or the archive cannot be written.</exception>
-    public static void Write(IEnumerable<TarItem> items, string destination)
+    public static void Write(IEnumerable<TarItem> items, string destination) => Write(items, destination, debian: false);
+
+    /// <summary>
+    /// Like <see cref="Write(IEnumerable{TarItem}, string)"/>, in the form <c>dpkg-deb</c> writes the
+    /// members of a deb: a <c>./</c> entry first, every name prefixed with <c>./</c>, owner and
+    /// group named <c>root</c>.
+    /// </summary>
+    /// <exception cref="ArgumentException">A name is empty, absolute, contains '\', '.' or '..' segments, or occurs twice.</exception>
+    /// <exception cref="IOException">A file cannot be read or the archive cannot be written.</exception>
+    public static void WriteDebian(IEnumerable<TarItem> items, string destination) => Write(items, destination, debian: true);
+
+    private static void Write(IEnumerable<TarItem> items, string destination, bool debian)
     {
         ArgumentNullException.ThrowIfNull(items);
         ArgumentException.ThrowIfNullOrEmpty(destination);
@@ -90,9 +101,14 @@ public static class ReproducibleTar
             using (var gzip = new GZipStream(file, CompressionLevel.Optimal, leaveOpen: true))
             using (var writer = new TarWriter(gzip, TarEntryFormat.Gnu, leaveOpen: true))
             {
+                if (debian)
+                {
+                    WriteEntry(writer, TarItem.Directory("."), string.Empty, "root");
+                }
+
                 foreach (var item in sorted)
                 {
-                    WriteEntry(writer, item);
+                    WriteEntry(writer, item, debian ? "./" : string.Empty, debian ? "root" : string.Empty);
                 }
             }
 
@@ -101,13 +117,13 @@ public static class ReproducibleTar
         }
     }
 
-    private static void WriteEntry(TarWriter writer, TarItem item)
+    private static void WriteEntry(TarWriter writer, TarItem item, string prefix, string owner)
     {
         var (type, name) = item.Kind switch
         {
-            TarItemKind.Directory => (TarEntryType.Directory, item.Name + "/"),
-            TarItemKind.SymbolicLink => (TarEntryType.SymbolicLink, item.Name),
-            _ => (TarEntryType.RegularFile, item.Name),
+            TarItemKind.Directory => (TarEntryType.Directory, prefix + item.Name + "/"),
+            TarItemKind.SymbolicLink => (TarEntryType.SymbolicLink, prefix + item.Name),
+            _ => (TarEntryType.RegularFile, prefix + item.Name),
         };
         var entry = new GnuTarEntry(type, name)
         {
@@ -115,8 +131,8 @@ public static class ReproducibleTar
             Mode = item.Mode,
             Uid = 0,
             Gid = 0,
-            UserName = string.Empty,
-            GroupName = string.Empty,
+            UserName = owner,
+            GroupName = owner,
         };
         switch (item.Kind)
         {

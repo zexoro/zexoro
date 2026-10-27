@@ -33,6 +33,24 @@ public sealed class LinuxConfigTests
         Assert.Null(config.Linux.Icon);
         Assert.Empty(config.Linux.Categories);
         Assert.Equal("notes-app", config.Linux.PackageName(config.App));
+        Assert.Null(config.Linux.Maintainer);
+        Assert.Equal("Example Ltd.", config.Linux.MaintainerOf(config.App));
+        Assert.Empty(config.Linux.Deb.Depends);
+    }
+
+    [Fact]
+    public void Linux_MaintainerAndDebDepends_AreRead()
+    {
+        var config = Parse(Minimal + """
+            [linux]
+            maintainer = "Example Ltd. <dev@example.com>"
+
+            [linux.deb]
+            depends = ["libicu74 | libicu72", "libfoo (>= 1.2)"]
+            """);
+
+        Assert.Equal("Example Ltd. <dev@example.com>", config.Linux.MaintainerOf(config.App));
+        Assert.Equal(["libicu74 | libicu72", "libfoo (>= 1.2)"], config.Linux.Deb.Depends);
     }
 
     [Fact]
@@ -61,6 +79,11 @@ public sealed class LinuxConfigTests
     [InlineData("categories = [\"Office\", \"Office\"]", "linux.categories: 'Office' is listed twice")]
     [InlineData("categories = \"Office\"", "linux.categories must be an array, but is a string")]
     [InlineData("icon = \"\"", "linux.icon must not be empty")]
+    [InlineData("maintainer = \"a\\nb\"", "linux.maintainer must be one line of text, such as 'Example Ltd. <dev@example.com>'")]
+    [InlineData("maintainer = \" \"", "linux.maintainer must be one line of text, such as 'Example Ltd. <dev@example.com>'")]
+    [InlineData("[linux.deb]\ndepends = [\"a\\nPackage: b\"]", "linux.deb.depends[0] must be one line of text, such as 'libicu74 | libicu72'")]
+    [InlineData("[linux.deb]\ndepends = \"libc6\"", "linux.deb.depends must be an array, but is a string")]
+    [InlineData("[linux.deb]\nrequires = []", "unknown key 'linux.deb.requires'")]
     public void Linux_InvalidKeys_AreErrors(string line, string message) =>
         Assert.Equal(message, Assert.Single(Errors(Minimal + "[linux]\n" + line + "\n")).Message);
 

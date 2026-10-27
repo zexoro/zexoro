@@ -4,8 +4,8 @@ using Zexoro.Platforms;
 
 namespace Zexoro.Formats.Linux;
 
-/// <summary>Packing a tar.gz failed; the message is for the user.</summary>
-public sealed class TarPackException(string message, Exception? innerException = null) : Exception(message, innerException);
+/// <summary>Packing a Linux format (tar.gz, deb) failed; the message is for the user.</summary>
+public sealed class LinuxPackException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 /// <summary>What <see cref="LinuxTarPackager.Pack"/> needs.</summary>
 public sealed record LinuxTarPackRequest
@@ -23,7 +23,7 @@ public sealed record LinuxTarPackRequest
 
     /// <summary>
     /// Returns the zexoro-updater build for a runtime; needed with <c>[updates]</c>. It throws
-    /// <see cref="TarPackException"/> when none is available.
+    /// <see cref="LinuxPackException"/> when none is available.
     /// </summary>
     public Func<UpdaterRuntime, UnixUpdaterBinary>? ResolveUpdater { get; init; }
 }
@@ -86,14 +86,14 @@ public static class LinuxTarPackager
     /// The application icon as PNG: <c>[linux] icon</c> (a PNG file), else the largest image of
     /// <c>[app] icon</c> (PNG or ICO).
     /// </summary>
-    /// <exception cref="TarPackException">The icon is missing or not usable.</exception>
+    /// <exception cref="LinuxPackException">The icon is missing or not usable.</exception>
     public static PngImage LoadIcon(ZexoroConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
         var path = config.Linux.Icon ?? config.App.Icon;
         if (!File.Exists(path.FullPath))
         {
-            throw new TarPackException($"{path.Key}: {path.FullPath} not found.");
+            throw new LinuxPackException($"{path.Key}: {path.FullPath} not found.");
         }
 
         try
@@ -101,23 +101,23 @@ public static class LinuxTarPackager
             var bytes = File.ReadAllBytes(path.FullPath);
             if (config.Linux.Icon is not null && !PngIcon.IsPng(bytes))
             {
-                throw new TarPackException($"{path.Key}: {path.FullPath} is not a PNG file.");
+                throw new LinuxPackException($"{path.Key}: {path.FullPath} is not a PNG file.");
             }
 
             return PngIcon.FromBytes(bytes);
         }
         catch (IconException ex)
         {
-            throw new TarPackException($"{path.Key}: {path.FullPath}: {ex.Message}.", ex);
+            throw new LinuxPackException($"{path.Key}: {path.FullPath}: {ex.Message}.", ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new TarPackException($"{path.Key}: cannot read {path.FullPath}: {ex.Message}", ex);
+            throw new LinuxPackException($"{path.Key}: cannot read {path.FullPath}: {ex.Message}", ex);
         }
     }
 
     /// <summary>Builds the archive.</summary>
-    /// <exception cref="TarPackException">An input is missing or invalid, or the archive cannot be written.</exception>
+    /// <exception cref="LinuxPackException">An input is missing or invalid, or the archive cannot be written.</exception>
     public static LinuxTarPackResult Pack(LinuxTarPackRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -126,41 +126,21 @@ public static class LinuxTarPackager
         var architecture = request.Architecture;
         if (!Architectures.Contains(architecture))
         {
-            throw new TarPackException($"Linux tar.gz archives support x64 and arm64, not {architecture.Name}.");
+            throw new LinuxPackException($"Linux tar.gz archives support x64 and arm64, not {architecture.Name}.");
         }
 
         if (!Directory.Exists(input.Directory.FullPath))
         {
-            throw new TarPackException($"input.dir: directory {input.Directory.FullPath} not found; build your application first.");
+            throw new LinuxPackException($"input.dir: directory {input.Directory.FullPath} not found; build your application first.");
         }
 
         if (!File.Exists(input.Main.FullPath))
         {
-            throw new TarPackException($"input.main: {input.Main.FullPath} not found.");
+            throw new LinuxPackException($"input.main: {input.Main.FullPath} not found.");
         }
 
         var icon = LoadIcon(config);
-        byte[]? updater = null;
-        NsisUpdates? updates = null;
-        if (config.Updates is { } updatesConfig)
-        {
-            // Both before anything is written, so a missing updater or key file fails fast.
-            var runtime = UpdaterRuntime.Find(new TargetPlatform(OperatingSystemFamily.Linux, architecture))!;
-            var binary = request.ResolveUpdater?.Invoke(runtime)
-                ?? throw new TarPackException($"[updates] is configured, but no zexoro-updater for {runtime.Rid} is available.");
-            try
-            {
-                request.Log?.WriteLine($"Adding zexoro-updater ({binary.Source})");
-                updater = binary.ReadVerified();
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
-            {
-                throw new TarPackException($"Cannot read the updater for {runtime.Rid} ({binary.Source}): {ex.Message}", ex);
-            }
-
-            updates = new NsisUpdates(updatesConfig.Channel, updatesConfig.FeedUrl, updatesConfig.ResolveKeys());
-        }
-
+        var (updater, updates) = ReadUpdater(config, architecture, request.ResolveUpdater, request.Log);
         WarnAboutMusl(input.Main.FullPath, request.Log);
         var outputDirectory = Path.GetFullPath(request.OutputDirectory);
         var rootName = GetRootFolderName(config.App);
@@ -195,12 +175,43 @@ public static class LinuxTarPackager
         }
         catch (PayloadException ex)
         {
-            throw new TarPackException(ex.Message, ex);
+            throw new LinuxPackException(ex.Message, ex);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new TarPackException($"Cannot build the archive: {ex.Message}", ex);
+            throw new LinuxPackException($"Cannot build the archive: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// With <c>[updates]</c>, reads the glibc updater of <paramref name="architecture"/> and resolves
+    /// the update settings for the install record; both null without <c>[updates]</c>. Called before
+    /// anything is written, so a missing updater or key file fails fast.
+    /// </summary>
+    /// <exception cref="LinuxPackException">The updater is not available or not valid.</exception>
+    internal static (byte[]? Updater, NsisUpdates? Updates) ReadUpdater(
+        ZexoroConfig config, Architecture architecture, Func<UpdaterRuntime, UnixUpdaterBinary>? resolve, TextWriter? log)
+    {
+        if (config.Updates is not { } updatesConfig)
+        {
+            return (null, null);
+        }
+
+        var runtime = UpdaterRuntime.Find(new TargetPlatform(OperatingSystemFamily.Linux, architecture))!;
+        var binary = resolve?.Invoke(runtime)
+            ?? throw new LinuxPackException($"[updates] is configured, but no zexoro-updater for {runtime.Rid} is available.");
+        byte[] updater;
+        try
+        {
+            log?.WriteLine($"Adding zexoro-updater ({binary.Source})");
+            updater = binary.ReadVerified();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            throw new LinuxPackException($"Cannot read the updater for {runtime.Rid} ({binary.Source}): {ex.Message}", ex);
+        }
+
+        return (updater, new NsisUpdates(updatesConfig.Channel, updatesConfig.FeedUrl, updatesConfig.ResolveKeys()));
     }
 
     /// <summary>Warns when the main executable needs musl's dynamic loader: the archive's glibc updater does not run on musl systems.</summary>

@@ -225,7 +225,7 @@ internal sealed class IconCheck : IDoctorCheck
             var source = config.Linux.Icon is { } linuxIcon ? $"linux.icon: {linuxIcon.FullPath}" : "linux icon: converted from app.icon";
             report.Ok($"{source} ({png.Width}x{png.Height} PNG)");
         }
-        catch (TarPackException ex)
+        catch (LinuxPackException ex)
         {
             report.Error(ex.Message);
         }

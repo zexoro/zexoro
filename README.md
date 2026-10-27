@@ -2,7 +2,7 @@
 
 Package applications built with any technology into native installers, and keep them up to date.
 
-> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS), portable Windows zip archives and portable Linux tar.gz archives from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
+> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS), portable Windows zip archives, portable Linux tar.gz archives and Debian packages (deb) from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
 
 ## Install
 
@@ -37,6 +37,7 @@ zexoro init      # writes a commented zexoro.toml into the current directory
 zexoro doctor    # checks the configuration, the files it names, the certificate and the bundled NSIS
 zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe (and .zip with formats = ["nsis", "zip"]),
                  # or dist/<name>-<version>-linux-<arch>.tar.gz for a Linux build output
+                 # (and dist/<pkg>_<version>_<arch>.deb with formats = ["tar.gz", "deb"])
 ```
 
 `zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. `--input <dir>` and `--main <path>` replace `input.dir` and `input.main` (relative to the current directory and to the input directory), so one configuration can serve a CI matrix of build outputs, and `--format <f>[,<f>...]` replaces the formats of the target platform's table. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
@@ -49,7 +50,7 @@ zexoro packages build output; it never builds your application. One `pack` run p
 | ELF, 64-bit little-endian, for x86-64 or AArch64 | `linux-x64`, `linux-arm64` |
 | Mach-O for x86_64 or arm64; a universal binary with both slices | `osx-x64`, `osx-arm64`; `osx-universal` |
 
-An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` and Linux `tar.gz` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
+An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` and Linux `tar.gz` and `deb` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
 
 ## Configuration
 
@@ -105,19 +106,21 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 
 ### `[linux]` and `[macos]` (optional)
 
-Used when the target is Linux or macOS. Linux `tar.gz` is implemented; the other Linux formats and every macOS format are not yet, but the tables accept their names already.
+Used when the target is Linux or macOS. Linux `tar.gz` and `deb` are implemented; the other Linux formats and every macOS format are not yet, but the tables accept their names already.
 
 | Table | Key | Type | Default | Description |
 | --- | --- | --- | --- | --- |
-| `[linux]` | `formats` | array of `"tar.gz"`, `"appimage"`, `"deb"`, `"rpm"`, `"apk"` | `["tar.gz"]` | `tar.gz` is a [portable archive](#the-portable-targz). |
+| `[linux]` | `formats` | array of `"tar.gz"`, `"appimage"`, `"deb"`, `"rpm"`, `"apk"` | `["tar.gz"]` | `tar.gz` is a [portable archive](#the-portable-targz), `deb` a [Debian package](#the-deb-package). |
 | `[linux]` | `icon` | path | the largest image of `app.icon` | A PNG icon for Linux formats. Without it, `app.icon` is used: a PNG as it is, from an ICO the largest image (bitmaps are converted to PNG). |
-| `[linux]` | `package` | string | last segment of `app.id`, lower-cased | The package name of the deb, rpm and apk formats (not implemented yet): lower-case letters, digits, `+`, `-` and `.`, at least two characters, starting with a letter or digit. |
-| `[linux]` | `categories` | array of strings | `[]` | The `Categories` of the `.desktop` launcher that deb, rpm and apk packages will install, for example `["Office"]`. |
+| `[linux]` | `package` | string | last segment of `app.id`, lower-cased | The package name of the deb, rpm and apk formats (rpm and apk are not implemented yet): lower-case letters, digits, `+`, `-` and `.`, at least two characters, starting with a letter or digit. |
+| `[linux]` | `categories` | array of strings | `[]` | The `Categories` of the `.desktop` launcher that deb, rpm and apk packages install, for example `["Office"]`. |
+| `[linux]` | `maintainer` | string | `app.publisher` | The package maintainer of deb, rpm and apk packages, conventionally `"Name <email>"`; one line. |
+| `[linux.deb]` | `depends` | array of strings | `[]` | Relations for the deb's `Depends`, written verbatim, for example `["libicu74 \| libicu72"]`. With `[updates]`, zexoro puts the updater's own dependencies first (see [the deb package](#the-deb-package)). |
 | `[macos]` | `formats` | array of `"zip"`, `"dmg"`, `"pkg"` | `["zip"]` | |
 
 ### `[updates]` (optional)
 
-Makes installers and portable archives updatable: they then include `zexoro-updater.exe` (`zexoro-updater` in a tar.gz), record where to look for updates, and `pack` writes a release fragment `<package>.release.json` next to each package for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, packages have no updater.
+Makes installers and portable archives updatable: they then include `zexoro-updater.exe` (`zexoro-updater` in a tar.gz or deb), record where to look for updates, and `pack` writes a release fragment `<package>.release.json` next to each package for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, packages have no updater.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -190,9 +193,26 @@ Modes are normalized so the archive does not depend on your umask: directories a
 
 The archive carries the **glibc** updater of its architecture. zexoro cannot tell glibc from musl builds by their headers, and the feed could not tell two such archives apart, so tar.gz is for glibc distributions; `pack` warns when the main executable needs musl's loader. Alpine and other musl systems will be served by the apk format.
 
+## The deb package
+
+With `formats = ["deb"]` (or `pack --format deb`), `pack` writes a Debian binary package `<pkg>_<version>_<arch>.deb`, following Debian's naming: `<pkg>` is [`[linux] package`](#linux-and-macos-optional), the architecture `amd64` or `arm64`, and the version is `app.version` in Debian form: a pre-release gets `~` (`1.2.3-beta.1` becomes `1.2.3~beta.1`, which dpkg orders before `1.2.3`), build metadata is dropped (SemVer ignores it for ordering, so dpkg must too), and pre-release identifiers containing `-` are refused. Users install it with `sudo apt install ./<file>.deb` (or `dpkg -i`); it installs:
+
+```
+/opt/<pkg>/app/                         your build output
+/opt/<pkg>/zexoro-install.json          identity and update settings (format deb, scope machine, strategy notify)
+/opt/<pkg>/zexoro-updater               with [updates] only
+/usr/bin/<pkg>                          a link to the main executable
+/usr/share/applications/<app.id>.desktop
+/usr/share/icons/hicolor/<n>x<n>/apps/<app.id>.png   (/usr/share/pixmaps/ for sizes the theme has no directory for)
+```
+
+The control file has `Package`, `Version`, `Architecture`, `Maintainer` ([`[linux] maintainer`](#linux-and-macos-optional), else `app.publisher`), `Installed-Size`, `Depends`, `Section: misc`, `Priority: optional`, `Homepage` (`app.url`) and `Description` (the first line of `app.description`, or `app.name`; further lines become the extended description); `md5sums` lists every file. There are no maintainer scripts. With `[updates]`, `Depends` starts with what the updater needs, `libc6 (>= 2.28)` and OpenSSL (`libssl3t64 | libssl3 | libssl1.1`, which .NET uses for HTTPS and the feed signature), followed by your [`[linux.deb] depends`](#linux-and-macos-optional), and `Recommends: ca-certificates`. The package is written by zexoro itself (no `dpkg-deb` needed) and is reproducible like the tar.gz, so any host packs the same bytes. It is not signed: dpkg does not check package signatures (apt repositories sign their indexes, and zexoro does not build repositories).
+
+The package manager owns the installed files, so the updater never changes them (strategy `notify`): `check` reports a newer release and its package `url` from the signed feed, and `download` and `apply` exit 7. Your application tells the user, for example by linking to the `url` or to your apt repository; the user upgrades with `sudo apt install ./<new>.deb`.
+
 ## Automatic updates
 
-Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz, and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
+Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz or deb, and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
 zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
@@ -208,12 +228,12 @@ Upload the packages to the `download` URL first, then `feed.json` and `feed.json
 Your application drives the installed updater, `<install root>\zexoro-updater.exe`:
 
 ```
-zexoro-updater check    [--json]                       # 0 update available, 1 up to date
+zexoro-updater check    [--json]                       # 0 update available, 1 up to date; --json includes the package url
 zexoro-updater download [--json]                       # downloads and verifies the update
 zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 ```
 
-`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. One feed can carry the installer, the zip and the tar.gz archives of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`).
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. Installs owned by a package manager (deb) are only checked: `download` and `apply` exit 7 without touching anything, and the user installs the new package (its `url` is in `check --json`). One feed can carry the installer, the zip, the tar.gz archives and the deb packages of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`).
 
 ## zexoro exit codes
 

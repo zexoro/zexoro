@@ -167,7 +167,7 @@ public sealed class LinuxTarPackagerTests : IDisposable
     [Fact]
     public void Pack_LinuxIconThatIsNoPng_Fails()
     {
-        var error = Assert.Throws<TarPackException>(() => Pack(Config("icon = \"app.ico\"")));
+        var error = Assert.Throws<LinuxPackException>(() => Pack(Config("icon = \"app.ico\"")));
 
         Assert.Contains("linux.icon", error.Message, StringComparison.Ordinal);
         Assert.Contains("is not a PNG file", error.Message, StringComparison.Ordinal);
@@ -176,7 +176,7 @@ public sealed class LinuxTarPackagerTests : IDisposable
     [Fact]
     public void Pack_UpdaterForTheWrongArchitecture_Fails()
     {
-        var error = Assert.Throws<TarPackException>(() =>
+        var error = Assert.Throws<LinuxPackException>(() =>
             Pack(Config(UpdatesTable.Replace("KEY", Key, StringComparison.Ordinal)), resolve: runtime => Updater(runtime, TarFiles.Elf(183))));
 
         Assert.Contains("is not a linux-x64 executable", error.Message, StringComparison.Ordinal);
@@ -185,7 +185,7 @@ public sealed class LinuxTarPackagerTests : IDisposable
     [Fact]
     public void Pack_UpdaterWithTheWrongHash_Fails()
     {
-        var error = Assert.Throws<TarPackException>(() =>
+        var error = Assert.Throws<LinuxPackException>(() =>
             Pack(Config(UpdatesTable.Replace("KEY", Key, StringComparison.Ordinal)), resolve: runtime => new UnixUpdaterBinary(runtime, "x", new string('0', 64), () => new MemoryStream(TarFiles.Elf(62)))));
 
         Assert.Contains("expected 0000", error.Message, StringComparison.Ordinal);
@@ -193,7 +193,7 @@ public sealed class LinuxTarPackagerTests : IDisposable
 
     [Fact]
     public void Pack_X86_Fails() =>
-        Assert.Throws<TarPackException>(() => Pack(Config(), Architecture.X86));
+        Assert.Throws<LinuxPackException>(() => Pack(Config(), Architecture.X86));
 
     [Fact]
     public void Pack_MuslMainExecutable_Warns()

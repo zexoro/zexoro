@@ -14,7 +14,7 @@ public sealed record UnixUpdaterBinary(UpdaterRuntime Runtime, string Source, st
     /// Reads the updater, checking its SHA-256 and that its header names <see cref="Runtime"/>'s
     /// operating system and architecture.
     /// </summary>
-    /// <exception cref="TarPackException">It does not match.</exception>
+    /// <exception cref="LinuxPackException">It does not match.</exception>
     /// <exception cref="IOException">It cannot be read.</exception>
     public byte[] ReadVerified()
     {
@@ -29,13 +29,13 @@ public sealed record UnixUpdaterBinary(UpdaterRuntime Runtime, string Source, st
         var actual = Convert.ToHexStringLower(SHA256.HashData(bytes));
         if (!string.Equals(actual, Sha256, StringComparison.OrdinalIgnoreCase))
         {
-            throw new TarPackException($"The updater for {Runtime.Rid} ({Source}) has SHA-256 {actual}, expected {Sha256}.");
+            throw new LinuxPackException($"The updater for {Runtime.Rid} ({Source}) has SHA-256 {actual}, expected {Sha256}.");
         }
 
         using var stream = new MemoryStream(bytes, writable: false);
         if (ExecutableInspector.Inspect(stream).Target != Runtime.Platform)
         {
-            throw new TarPackException($"The updater for {Runtime.Rid} ({Source}) is not a {Runtime.Platform} executable.");
+            throw new LinuxPackException($"The updater for {Runtime.Rid} ({Source}) is not a {Runtime.Platform} executable.");
         }
 
         return bytes;

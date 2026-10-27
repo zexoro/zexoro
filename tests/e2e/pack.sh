@@ -13,20 +13,23 @@
 #   repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz          a tar.gz of the same files; likewise
 #   linux/ZexoroE2ETar-{1.0.0,2.0.0}-linux-{x64,arm64}.tar.gz  portable tar.gz with [updates] (and *.tar.gz.release.json)
 #   linux/no-updates/ZexoroE2ETar-1.0.0-linux-{x64,arm64}.tar.gz  portable tar.gz without [updates]
+#   deb/zexoro-e2e_{1.0.0,2.0.0}_{amd64,arm64}.deb       deb packages with [updates] (and *.deb.release.json)
+#   deb/no-updates/zexoro-e2e_1.0.0_{amd64,arm64}.deb    deb packages without [updates]
+#   repro/repro_1.0.0_amd64.deb                         a deb of the same files; likewise
 #   linux/links                                         present when the tar.gz inputs hold a symbolic link
 #                                                       (app/bin/version.txt -> ../version.txt; not on Windows hosts)
 #   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #   zexoro-update.pub                                   the update public key the installers trust
 #   zexoro-update.key.pem                               its (throwaway) private key, to publish more feeds while testing
-#   feeds/{user,machine,portable,tar}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
-#   feeds/{user,machine,portable,tar}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
-#   feeds/{user,machine,portable,tar}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
-#   (feeds/tar/* list the x64 and arm64 tar.gz of each version)
+#   feeds/{user,machine,portable,tar,deb}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
+#   feeds/{user,machine,portable,tar,deb}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
+#   feeds/{user,machine,portable,tar,deb}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
+#   (feeds/tar/* and feeds/deb/* list the x64 and arm64 packages of each version)
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
 # The packages' [updates] point at http://localhost:8080/<kind>/stable/, where
 # tests/e2e/windows/Run-UpdateE2E.ps1 (user, machine), Run-ZipE2E.ps1 (portable) and
-# tests/e2e/unix/run-tar-e2e.sh (tar) serve the feeds and packages.
+# tests/e2e/unix/run-tar-e2e.sh (tar) and run-deb-e2e.sh (deb) serve the feeds and packages.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -201,6 +204,54 @@ for arch in x64 arm64; do
 done
 if [ "$links" = yes ]; then touch "$out/linux/links"; fi
 
+# deb_config <version> <arch> <with updates: yes|no>: writes $work/zexoro.toml for the deb package.
+deb_config() {
+  local version=$1 arch=$2 updates=$3
+  cat > "$work/zexoro.toml" <<TOML
+[app]
+id          = "dev.zexoro.e2e.deb"
+name        = "Zexoro E2E Deb"
+version     = "$version"
+publisher   = "zexoro e2e"
+icon        = "app.ico"
+description = "End-to-end test application\nPackaged by tests/e2e/pack.sh to test zexoro's deb packages."
+url         = "https://github.com/zexoro/zexoro"
+
+[input]
+dir  = "input-linux-$arch/$version"
+main = "FixtureApp"
+
+[linux]
+formats    = ["deb"]
+package    = "zexoro-e2e"
+maintainer = "zexoro e2e <e2e@zexoro.invalid>"
+categories = ["Utility"]
+
+[linux.deb]
+depends = ["coreutils"]
+TOML
+  if [ "$updates" = yes ]; then
+    cat >> "$work/zexoro.toml" <<TOML
+
+[updates]
+feed     = "http://localhost:8080/deb/{channel}/feed.json"
+download = "http://localhost:8080/deb/{channel}/{file}"
+keys     = [{ file = "keys/zexoro-update.pub" }]
+TOML
+  fi
+}
+
+for arch in x64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    echo "== Packing deb $version linux-$arch"
+    deb_config "$version" "$arch" yes
+    (cd "$work" && "$cli" pack --output "$out/deb")
+  done
+  echo "== Packing deb 1.0.0 linux-$arch without [updates]"
+  deb_config 1.0.0 "$arch" no
+  (cd "$work" && "$cli" pack --output "$out/deb/no-updates")
+done
+
 echo "== Packing a zip and a tar.gz of fixed files (reproducibility across pack hosts)"
 mkdir -p "$work/repro/bin/empty"
 printf '@echo off\r\necho repro\r\n' > "$work/repro/bin/run.cmd"
@@ -228,6 +279,7 @@ sed -e 's/main   = "run.cmd"/main   = "run.sh"/' -e 's/target = "win-x64"/target
   "$work/repro/zexoro.toml" > "$work/repro/linux.toml"
 grep -q 'target = "linux-x64"' "$work/repro/linux.toml"
 (cd "$work/repro" && "$cli" pack --config linux.toml --output "$out/repro")
+(cd "$work/repro" && "$cli" pack --config linux.toml --format deb --output "$out/repro")
 
 echo "== Installers"
 (cd "$out" && find . -type f | sort)
@@ -243,7 +295,15 @@ for arch in x64 arm64; do
     test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
   done
 done
-for f in unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
+for debarch in amd64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    f="deb/zexoro-e2e_${version}_$debarch.deb"
+    test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
+    test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
+  done
+  test -f "$out/deb/no-updates/zexoro-e2e_1.0.0_$debarch.deb" || { echo "missing deb/no-updates/zexoro-e2e_1.0.0_$debarch.deb" >&2; exit 1; }
+done
+for f in repro/repro_1.0.0_amd64.deb unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
   repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-arm64.tar.gz; do
   test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
 done
@@ -251,7 +311,7 @@ if ls "$out"/portable/*.exe >/dev/null 2>&1; then
   echo "formats = [\"zip\"] also built an installer" >&2
   exit 1
 fi
-if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json >/dev/null 2>&1; then
+if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json "$out"/deb/no-updates/*.release.json >/dev/null 2>&1; then
   echo "a package without [updates] got a release fragment" >&2
   exit 1
 fi
@@ -259,12 +319,15 @@ fi
 echo "== Publishing signed feeds (one per application)"
 "$cli" keys new --output "$work/keys" --name other
 cp "$work/keys/zexoro-update.key.pem" "$out/zexoro-update.key.pem"
-for scope in user machine portable tar; do
+for scope in user machine portable tar deb; do
   title="$(printf '%s' "${scope:0:1}" | tr '[:lower:]' '[:upper:]')${scope:1}"
   if [ "$scope" = tar ]; then
     # Both architectures of each version: one release with two artifacts.
     v1=("$out"/linux/ZexoroE2ETar-1.0.0-linux-*.tar.gz.release.json)
     v2=("$out"/linux/ZexoroE2ETar-2.0.0-linux-*.tar.gz.release.json)
+  elif [ "$scope" = deb ]; then
+    v1=("$out"/deb/zexoro-e2e_1.0.0_*.deb.release.json)
+    v2=("$out"/deb/zexoro-e2e_2.0.0_*.deb.release.json)
   else
     extension=$([ "$scope" = portable ] && echo zip || echo exe)
     v1=("$out/$scope/ZexoroE2E$title-1.0.0-win-x64.$extension.release.json")
