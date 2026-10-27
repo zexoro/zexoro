@@ -75,16 +75,20 @@ equal() { # <actual> <expected> <message>
   if [ "$1" = "$2" ]; then pass "$3"; else fail "$3 (got '$1', expected '$2')"; fi
 }
 
-# json <file> <field>: a top-level field of the last JSON object line of <file> (arrays joined by ',').
+# json <file> <field>: a top-level field of the JSON file <file>, or of its last line that is a JSON
+# object (updater output); arrays are joined by ','.
 json() {
   python3 -I - "$1" "$2" <<'PY'
 import json, sys
-lines = [l for l in open(sys.argv[1], encoding="utf-8").read().splitlines() if l.strip().startswith("{")]
-text = lines[-1] if lines else open(sys.argv[1], encoding="utf-8").read()
+text = open(sys.argv[1], encoding="utf-8").read()
 try:
     value = json.loads(text).get(sys.argv[2])
 except ValueError:
-    value = None
+    lines = [l for l in text.splitlines() if l.strip().startswith("{")]
+    try:
+        value = json.loads(lines[-1]).get(sys.argv[2]) if lines else None
+    except ValueError:
+        value = None
 print("" if value is None else ",".join(value) if isinstance(value, list) else value)
 PY
 }
@@ -302,7 +306,8 @@ if [ -f "$packages/linux/links" ]; then
   equal "$(cat "$root/app/bin/version.txt")" 2.0.0 "app/bin/version.txt reads 2.0.0 through the link"
 fi
 equal "$(downloads)" "" "the downloads were cleared"
-equal "$(ls -A "$TMPDIR")" "" "no updater copy is left in \$TMPDIR"
+# The .NET runtime of the fixture app leaves its diagnostic pipes (clr-debug-pipe-*) there too.
+equal "$(ls -A "$TMPDIR" | grep '^zexoro-updater' || true)" "" "no updater copy is left in \$TMPDIR"
 
 echo "-- up to date afterwards"
 updater "$root" check 1 up-to-date "2.0.0 is the newest release"
