@@ -249,7 +249,7 @@ public sealed class PackCommandTests : IDisposable
 
         Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
 
-        Assert.Equal("zexoro: the linux format 'deb' is not implemented yet; this zexoro version packs no linux formats" + Environment.NewLine, Stderr);
+        Assert.Equal("zexoro: the linux format 'deb' is not implemented yet; this zexoro version packs tar.gz for linux" + Environment.NewLine, Stderr);
     }
 
     [Fact]
@@ -443,6 +443,48 @@ public sealed class PackCommandTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/beta.json", "--key", "keys/zexoro-update.key.pem", installer + ".release.json"));
         Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/beta.json"));
+    }
+
+    [Fact]
+    public void Pack_LinuxTarGzWithUpdates_WritesTheArchiveAndAReleaseFragmentThatFeedAddAccepts()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-linux-x64", ElfHeader());
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        WriteProject("[linux]\ncategories = [\"Office\"]\n" + UpdatesTable);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes", "--notes", "https://example.com/notes/1.2.3"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("for linux-x64: tar.gz", Stdout, StringComparison.Ordinal);
+        Assert.Contains("Adding zexoro-updater (updater for linux-x64 from ZEXORO_UPDATER_DIR", Stdout, StringComparison.Ordinal);
+        var archive = Path.Combine(Dist, "ExampleNotes-1.2.3-linux-x64.tar.gz");
+        Assert.Equal([archive], Directory.GetFiles(Dist, "*.tar.gz"));
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(archive + ".release.json"));
+        Assert.Equal(Zexoro.Formats.Linux.LinuxTarPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("linux", "x64", "tar-gz", "user"), artifact.Target);
+        Assert.Equal(new Uri("https://example.com/dl/stable/ExampleNotes-1.2.3-linux-x64.tar.gz"), artifact.Url);
+        Assert.Equal(new FileInfo(archive).Length, artifact.Size);
+
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", archive + ".release.json"));
+        Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/stable.json"));
+    }
+
+    [Fact]
+    public void Pack_LinuxTarGzWithoutAnUpdater_FailsBeforeWriting()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        Directory.CreateDirectory(Path.Combine(_dir.FullName, "updaters"));
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        WriteProject("[linux]\n" + UpdatesTable);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Contains("zexoro-updater-linux-x64 does not exist", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
     }
 
     [Fact]

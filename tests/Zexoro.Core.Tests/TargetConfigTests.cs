@@ -77,7 +77,7 @@ public sealed class TargetConfigTests : IDisposable
     [InlineData("[macos]\nformats = []", "macos.formats must list at least one format; omit it for the default (zip)")]
     [InlineData("[linux]\nformats = \"deb\"", "linux.formats must be an array, but is a string")]
     [InlineData("[linux]\nformats = [1]", "linux.formats[0] must be a string, but is an integer")]
-    [InlineData("[linux]\npackage = \"notes\"", "unknown key 'linux.package'")]
+    [InlineData("[linux]\nmaintainer = \"me\"", "unknown key 'linux.maintainer'")]
     public void Formats_Invalid_IsAnError(string table, string message) =>
         Assert.Equal(message, Assert.Single(Errors(Minimal + table + "\n")).Message);
 

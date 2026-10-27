@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!-- The application that the end-to-end tests package. Not part of zexoro.slnx: tests/e2e/pack.sh
-       publishes it framework-dependent for win-x64, which cross-compiles from any OS. -->
+       publishes it framework-dependent for win-x64, linux-x64 and linux-arm64, which cross-compiles from any OS. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>FixtureApp</AssemblyName>

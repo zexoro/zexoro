@@ -26,7 +26,15 @@ public static class InstallRecord
     /// <paramref name="main"/> is written only with <paramref name="updates"/>.
     /// </summary>
     public static byte[] Create(
-        string appId, SemanticVersion version, Architecture architecture, string format, string scope, string strategy, NsisUpdates? updates, string main)
+        string appId, SemanticVersion version, Architecture architecture, string format, string scope, string strategy, NsisUpdates? updates, string main) =>
+        Create(appId, version, new TargetPlatform(OperatingSystemFamily.Windows, architecture), format, scope, strategy, updates, main);
+
+    /// <summary>
+    /// Returns a record as indented UTF-8 JSON with a final newline, for a format of any operating
+    /// system. <paramref name="main"/> is written only with <paramref name="updates"/>.
+    /// </summary>
+    public static byte[] Create(
+        string appId, SemanticVersion version, TargetPlatform target, string format, string scope, string strategy, NsisUpdates? updates, string main)
     {
         ArgumentNullException.ThrowIfNull(version);
         using var buffer = new MemoryStream();
@@ -36,8 +44,8 @@ public static class InstallRecord
             writer.WriteNumber("schema", Schema);
             writer.WriteString("app", appId);
             writer.WriteString("version", version.ToString());
-            writer.WriteString("os", "windows");
-            writer.WriteString("arch", architecture.Name);
+            writer.WriteString("os", target.OperatingSystem.Name);
+            writer.WriteString("arch", target.Architecture.Name);
             writer.WriteString("format", format);
             writer.WriteString("scope", scope);
             writer.WriteString("strategy", strategy);

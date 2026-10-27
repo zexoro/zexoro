@@ -10,17 +10,23 @@
 #   {user,machine}/*.exe.release.json, portable/*.zip.release.json   their release fragments
 #   unsigned/ZexoroE2EUser-1.0.0-win-x64.{exe,zip}       per-user installer and zip, no [windows.signing], no [updates]
 #   repro/ZexoroE2ERepro-1.0.0-win-x64.zip               a zip of fixed files; its bytes must be the same on every pack host
+#   repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz          a tar.gz of the same files; likewise
+#   linux/ZexoroE2ETar-{1.0.0,2.0.0}-linux-{x64,arm64}.tar.gz  portable tar.gz with [updates] (and *.tar.gz.release.json)
+#   linux/no-updates/ZexoroE2ETar-1.0.0-linux-{x64,arm64}.tar.gz  portable tar.gz without [updates]
+#   linux/links                                         present when the tar.gz inputs hold a symbolic link
+#                                                       (app/bin/version.txt -> ../version.txt; not on Windows hosts)
 #   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #   zexoro-update.pub                                   the update public key the installers trust
 #   zexoro-update.key.pem                               its (throwaway) private key, to publish more feeds while testing
-#   feeds/{user,machine,portable}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
-#   feeds/{user,machine,portable}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
-#   feeds/{user,machine,portable}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
+#   feeds/{user,machine,portable,tar}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
+#   feeds/{user,machine,portable,tar}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
+#   feeds/{user,machine,portable,tar}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
+#   (feeds/tar/* list the x64 and arm64 tar.gz of each version)
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
 # The packages' [updates] point at http://localhost:8080/<kind>/stable/, where
-# tests/e2e/windows/Run-UpdateE2E.ps1 (user, machine) and Run-ZipE2E.ps1 (portable) serve the
-# feeds and packages.
+# tests/e2e/windows/Run-UpdateE2E.ps1 (user, machine), Run-ZipE2E.ps1 (portable) and
+# tests/e2e/unix/run-tar-e2e.sh (tar) serve the feeds and packages.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -45,6 +51,29 @@ for version in 1.0.0 2.0.0; do
 done
 printf 'removed by version 2.0.0\n' > "$work/input/1.0.0/obsolete.txt"
 cp "$here/fixture-app/app.ico" "$work/app.ico"
+
+# Git Bash on Windows cannot be relied on to create symbolic links, so only other hosts add one.
+case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) links=no ;;
+  *) links=yes ;;
+esac
+
+echo "== Publishing the fixture app (framework-dependent, linux-x64 and linux-arm64)"
+for arch in x64 arm64; do
+  dotnet publish "$here/fixture-app" -c Release -r "linux-$arch" --self-contained false -o "$work/publish-linux-$arch" -nologo -v quiet
+  for version in 1.0.0 2.0.0; do
+    dir="$work/input-linux-$arch/$version"
+    mkdir -p "$dir/bin"
+    cp -R "$work/publish-linux-$arch/." "$dir/"
+    rm -f "$dir"/*.pdb
+    printf '%s\n' "$version" > "$dir/version.txt"
+    # A script without an execute bit on disk: the archive must make it executable (#!).
+    printf '#!/bin/sh\necho "helper %s"\n' "$version" > "$dir/bin/helper.sh"
+    chmod 644 "$dir/bin/helper.sh"
+    if [ "$links" = yes ]; then ln -s ../version.txt "$dir/bin/version.txt"; fi
+  done
+  printf 'removed by version 2.0.0\n' > "$work/input-linux-$arch/1.0.0/obsolete.txt"
+done
 
 echo "== Creating a throwaway code-signing certificate"
 # A root CA and a code-signing leaf issued by it: Windows does not accept a self-signed CA
@@ -130,9 +159,52 @@ config user 1.0.0 no
 grep -q "notice: \[windows.signing\] is not configured; the installer" "$work/unsigned.log"
 grep -q "notice: \[windows.signing\] is not configured; the application in the zip" "$work/unsigned.log"
 
-echo "== Packing a zip of fixed files (reproducibility across pack hosts)"
+# tar_config <version> <arch> <with updates: yes|no>: writes $work/zexoro.toml for the portable tar.gz.
+tar_config() {
+  local version=$1 arch=$2 updates=$3
+  cat > "$work/zexoro.toml" <<TOML
+[app]
+id        = "dev.zexoro.e2e.tar"
+name      = "Zexoro E2E Tar"
+version   = "$version"
+publisher = "zexoro e2e"
+icon      = "app.ico"
+
+[input]
+dir  = "input-linux-$arch/$version"
+main = "FixtureApp"
+
+[linux]
+formats    = ["tar.gz"]
+categories = ["Utility"]
+TOML
+  if [ "$updates" = yes ]; then
+    cat >> "$work/zexoro.toml" <<TOML
+
+[updates]
+feed     = "http://localhost:8080/tar/{channel}/feed.json"
+download = "http://localhost:8080/tar/{channel}/{file}"
+keys     = [{ file = "keys/zexoro-update.pub" }]
+TOML
+  fi
+}
+
+for arch in x64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    echo "== Packing tar.gz $version linux-$arch"
+    tar_config "$version" "$arch" yes
+    (cd "$work" && "$cli" pack --output "$out/linux")
+  done
+  echo "== Packing tar.gz 1.0.0 linux-$arch without [updates]"
+  tar_config 1.0.0 "$arch" no
+  (cd "$work" && "$cli" pack --output "$out/linux/no-updates")
+done
+if [ "$links" = yes ]; then touch "$out/linux/links"; fi
+
+echo "== Packing a zip and a tar.gz of fixed files (reproducibility across pack hosts)"
 mkdir -p "$work/repro/bin/empty"
 printf '@echo off\r\necho repro\r\n' > "$work/repro/bin/run.cmd"
+printf '#!/bin/sh\necho repro\n' > "$work/repro/bin/run.sh"
 printf 'fixed content %s\n' $(seq 1 200) > "$work/repro/bin/data.txt"
 cp "$here/fixture-app/app.ico" "$work/repro/bin/app.ico"
 cat > "$work/repro/zexoro.toml" <<'TOML'
@@ -152,6 +224,10 @@ target = "win-x64"
 formats = ["zip"]
 TOML
 (cd "$work/repro" && "$cli" pack --output "$out/repro")
+sed -e 's/main   = "run.cmd"/main   = "run.sh"/' -e 's/target = "win-x64"/target = "linux-x64"/' -e 's/^\[windows\]$/[linux]/' -e 's/formats = \["zip"\]/formats = ["tar.gz"]/' \
+  "$work/repro/zexoro.toml" > "$work/repro/linux.toml"
+grep -q 'target = "linux-x64"' "$work/repro/linux.toml"
+(cd "$work/repro" && "$cli" pack --config linux.toml --output "$out/repro")
 
 echo "== Installers"
 (cd "$out" && find . -type f | sort)
@@ -160,14 +236,22 @@ for f in user/ZexoroE2EUser-1.0.0-win-x64.exe user/ZexoroE2EUser-2.0.0-win-x64.e
   test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
   test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
 done
-for f in unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip; do
+for arch in x64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    f="linux/ZexoroE2ETar-$version-linux-$arch.tar.gz"
+    test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
+    test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
+  done
+done
+for f in unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
+  repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-arm64.tar.gz; do
   test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
 done
 if ls "$out"/portable/*.exe >/dev/null 2>&1; then
   echo "formats = [\"zip\"] also built an installer" >&2
   exit 1
 fi
-if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json >/dev/null 2>&1; then
+if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json >/dev/null 2>&1; then
   echo "a package without [updates] got a release fragment" >&2
   exit 1
 fi
@@ -175,20 +259,26 @@ fi
 echo "== Publishing signed feeds (one per application)"
 "$cli" keys new --output "$work/keys" --name other
 cp "$work/keys/zexoro-update.key.pem" "$out/zexoro-update.key.pem"
-for scope in user machine portable; do
+for scope in user machine portable tar; do
   title="$(printf '%s' "${scope:0:1}" | tr '[:lower:]' '[:upper:]')${scope:1}"
-  extension=$([ "$scope" = portable ] && echo zip || echo exe)
-  v1="$out/$scope/ZexoroE2E$title-1.0.0-win-x64.$extension.release.json"
-  v2="$out/$scope/ZexoroE2E$title-2.0.0-win-x64.$extension.release.json"
+  if [ "$scope" = tar ]; then
+    # Both architectures of each version: one release with two artifacts.
+    v1=("$out"/linux/ZexoroE2ETar-1.0.0-linux-*.tar.gz.release.json)
+    v2=("$out"/linux/ZexoroE2ETar-2.0.0-linux-*.tar.gz.release.json)
+  else
+    extension=$([ "$scope" = portable ] && echo zip || echo exe)
+    v1=("$out/$scope/ZexoroE2E$title-1.0.0-win-x64.$extension.release.json")
+    v2=("$out/$scope/ZexoroE2E$title-2.0.0-win-x64.$extension.release.json")
+  fi
   feed="$work/feed/$scope/feed.json"
   # The same feed file twice: 1.0.0 alone, then 2.0.0 added, which raises the sequence.
-  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "$v1"
+  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "${v1[@]}"
   mkdir -p "$out/feeds/$scope/seq1"
   cp "$feed" "$feed.sig" "$out/feeds/$scope/seq1/"
-  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "$v2"
+  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "${v2[@]}"
   mkdir -p "$out/feeds/$scope/seq2"
   cp "$feed" "$feed.sig" "$out/feeds/$scope/seq2/"
-  "$cli" feed add --feed "$work/other/$scope/feed.json" --key "$work/keys/other.key.pem" "$v1" "$v2"
+  "$cli" feed add --feed "$work/other/$scope/feed.json" --key "$work/keys/other.key.pem" "${v1[@]}" "${v2[@]}"
   mkdir -p "$out/feeds/$scope/other-key"
   cp "$work/other/$scope/feed.json" "$work/other/$scope/feed.json.sig" "$out/feeds/$scope/other-key/"
   for variant in seq1 seq2; do

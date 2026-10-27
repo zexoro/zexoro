@@ -348,9 +348,31 @@ public sealed class WindowsConfig : PlatformConfig
 /// <summary><c>[linux]</c>: Linux package settings.</summary>
 public sealed class LinuxConfig : PlatformConfig
 {
-    internal LinuxConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats)
+    internal LinuxConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats, string? package, ConfigPath? icon, IReadOnlyList<string> categories)
         : base(OperatingSystemFamily.Linux, isConfigured, formats)
     {
+        Package = package;
+        Icon = icon;
+        Categories = categories;
+    }
+
+    /// <summary>
+    /// <c>package</c>: the package name of deb, rpm and apk packages, already validated
+    /// (<see cref="LinuxPackageName"/>), or null for the default derived from <c>app.id</c>.
+    /// </summary>
+    public string? Package { get; }
+
+    /// <summary><c>icon</c>: a PNG icon, or null to convert the largest image of <c>[app] icon</c>.</summary>
+    public ConfigPath? Icon { get; }
+
+    /// <summary><c>categories</c>: the <c>Categories</c> of the <c>.desktop</c> file, in order; empty when not set.</summary>
+    public IReadOnlyList<string> Categories { get; }
+
+    /// <summary>The package name: <see cref="Package"/>, or the last segment of <paramref name="app"/>'s id, lower-cased.</summary>
+    public string PackageName(AppConfig app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        return Package ?? LinuxPackageName.Derive(app.Id);
     }
 }
 

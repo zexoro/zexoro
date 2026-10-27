@@ -39,6 +39,7 @@ public static class ExecutableInspector
     private const ushort ElfTypeShared = 3;
     private const ushort ElfMachineX64 = 62;
     private const ushort ElfMachineArm64 = 183;
+    private const uint ElfProgramInterpreter = 3;
 
     private const uint MachOMagic32 = 0xFEEDFACE;
     private const uint MachOMagic64 = 0xFEEDFACF;
@@ -109,6 +110,64 @@ public static class ExecutableInspector
         }
 
         return Unsupported(ExecutableFormat.Unknown, "not a PE, ELF or Mach-O executable");
+    }
+
+    /// <summary>
+    /// Returns the program interpreter (<c>PT_INTERP</c>) of a 64-bit little-endian ELF file, such as
+    /// <c>/lib64/ld-linux-x86-64.so.2</c> (glibc) or <c>/lib/ld-musl-x86_64.so.1</c> (musl), or null
+    /// when the file is not such an ELF file or names none (a static executable).
+    /// </summary>
+    /// <exception cref="IOException">The file cannot be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">The file cannot be opened.</exception>
+    public static string? ReadElfInterpreter(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        using var stream = File.OpenRead(path);
+        Span<byte> header = stackalloc byte[64];
+        if (stream.ReadAtLeast(header, header.Length, throwOnEndOfStream: false) < header.Length
+            || !header[..4].SequenceEqual("\u007FELF"u8) || header[4] != 2 || header[5] != 1)
+        {
+            return null;
+        }
+
+        var tableOffset = BinaryPrimitives.ReadUInt64LittleEndian(header[0x20..]);
+        var entrySize = BinaryPrimitives.ReadUInt16LittleEndian(header[0x36..]);
+        var count = BinaryPrimitives.ReadUInt16LittleEndian(header[0x38..]);
+        if (entrySize < 56 || tableOffset > (ulong)stream.Length)
+        {
+            return null;
+        }
+
+        Span<byte> entry = stackalloc byte[56];
+        for (var i = 0; i < count; i++)
+        {
+            var position = tableOffset + ((ulong)i * entrySize);
+            if (position + 56 > (ulong)stream.Length)
+            {
+                return null;
+            }
+
+            stream.Position = (long)position;
+            stream.ReadExactly(entry);
+            if (BinaryPrimitives.ReadUInt32LittleEndian(entry) != ElfProgramInterpreter)
+            {
+                continue;
+            }
+
+            var offset = BinaryPrimitives.ReadUInt64LittleEndian(entry[0x08..]);
+            var size = BinaryPrimitives.ReadUInt64LittleEndian(entry[0x20..]);
+            if (size is 0 or > 4096 || offset + size > (ulong)stream.Length)
+            {
+                return null;
+            }
+
+            var bytes = new byte[size];
+            stream.Position = (long)offset;
+            stream.ReadExactly(bytes);
+            return System.Text.Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+        }
+
+        return null;
     }
 
     private static ExecutableInfo InspectElf(ReadOnlySpan<byte> header)

@@ -214,4 +214,36 @@ public class ExecutableInspectorTests
             File.Delete(path);
         }
     }
+
+    [Theory]
+    [InlineData("/lib64/ld-linux-x86-64.so.2")]
+    [InlineData("/lib/ld-musl-aarch64.so.1")]
+    public void ReadElfInterpreter_ReturnsThePtInterpPath(string interpreter)
+    {
+        var bytes = new byte[64 + 56 + interpreter.Length + 1];
+        Elf(62).CopyTo(bytes, 0);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(0x20), 64);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(0x36), 56);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(0x38), 2);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(64), 3);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(64 + 0x08), 120);
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(64 + 0x20), (ulong)interpreter.Length + 1);
+        System.Text.Encoding.ASCII.GetBytes(interpreter).CopyTo(bytes, 120);
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllBytes(path, bytes);
+            Assert.Equal(interpreter, ExecutableInspector.ReadElfInterpreter(path));
+
+            File.WriteAllBytes(path, Elf(62));
+            Assert.Null(ExecutableInspector.ReadElfInterpreter(path));
+
+            File.WriteAllBytes(path, "#!/bin/sh\n"u8.ToArray());
+            Assert.Null(ExecutableInspector.ReadElfInterpreter(path));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
