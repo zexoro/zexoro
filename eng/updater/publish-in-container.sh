@@ -50,7 +50,12 @@ docker run --rm \
   -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 -e DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
   "$image" sh -c "
     set -e
-    $setup
+    # Distribution mirrors fail now and then (for example an empty repomd.xml); retry the setup.
+    for attempt in 1 2 3 4; do
+      if $setup; then break; fi
+      [ \$attempt -lt 4 ] || exit 1
+      sleep \$((attempt * 15))
+    done
     if [ ! -x /src/$cache/$sdk/dotnet ]; then
       curl -fsSL --retry 5 https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh
       bash /tmp/dotnet-install.sh --jsonfile global.json --install-dir /src/$cache/$sdk
