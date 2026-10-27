@@ -3,6 +3,7 @@
     <Project Path="src/Zexoro.Cli/Zexoro.Cli.csproj" />
     <Project Path="src/Zexoro.Core/Zexoro.Core.csproj" />
     <Project Path="src/Zexoro.Formats.Nsis/Zexoro.Formats.Nsis.csproj" />
+    <Project Path="src/Zexoro.Formats.Zip/Zexoro.Formats.Zip.csproj" />
     <Project Path="src/Zexoro.Signing/Zexoro.Signing.csproj" />
     <Project Path="src/Zexoro.Toml/Zexoro.Toml.csproj" />
     <Project Path="src/Zexoro.Updater/Zexoro.Updater.csproj" />
@@ -12,6 +13,7 @@
     <Project Path="tests/Zexoro.Cli.Tests/Zexoro.Cli.Tests.csproj" />
     <Project Path="tests/Zexoro.Core.Tests/Zexoro.Core.Tests.csproj" />
     <Project Path="tests/Zexoro.Formats.Nsis.Tests/Zexoro.Formats.Nsis.Tests.csproj" />
+    <Project Path="tests/Zexoro.Formats.Zip.Tests/Zexoro.Formats.Zip.Tests.csproj" />
     <Project Path="tests/Zexoro.Signing.Fixtures/Zexoro.Signing.Fixtures.csproj" />
     <Project Path="tests/Zexoro.Signing.Tests/Zexoro.Signing.Tests.csproj" />
     <Project Path="tests/Zexoro.Toml.Tests/Zexoro.Toml.Tests.csproj" />

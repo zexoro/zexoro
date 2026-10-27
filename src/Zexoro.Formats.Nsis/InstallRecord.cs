@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Zexoro.Platforms;
+using Zexoro.Versioning;
 
 namespace Zexoro.Formats.Nsis;
 
@@ -16,19 +18,30 @@ public static class InstallRecord
     public static byte[] Create(NsisInstallerSpec spec)
     {
         ArgumentNullException.ThrowIfNull(spec);
+        return Create(spec.AppId, spec.Version, spec.Architecture, "nsis", spec.ScopeName, spec.Strategy, spec.Updates, spec.MainExecutable);
+    }
+
+    /// <summary>
+    /// Returns a record as indented UTF-8 JSON with a final newline, for any Windows format.
+    /// <paramref name="main"/> is written only with <paramref name="updates"/>.
+    /// </summary>
+    public static byte[] Create(
+        string appId, SemanticVersion version, Architecture architecture, string format, string scope, string strategy, NsisUpdates? updates, string main)
+    {
+        ArgumentNullException.ThrowIfNull(version);
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n" }))
         {
             writer.WriteStartObject();
             writer.WriteNumber("schema", Schema);
-            writer.WriteString("app", spec.AppId);
-            writer.WriteString("version", spec.Version.ToString());
+            writer.WriteString("app", appId);
+            writer.WriteString("version", version.ToString());
             writer.WriteString("os", "windows");
-            writer.WriteString("arch", spec.Architecture.Name);
-            writer.WriteString("format", "nsis");
-            writer.WriteString("scope", spec.ScopeName);
-            writer.WriteString("strategy", spec.Strategy);
-            if (spec.Updates is { } updates)
+            writer.WriteString("arch", architecture.Name);
+            writer.WriteString("format", format);
+            writer.WriteString("scope", scope);
+            writer.WriteString("strategy", strategy);
+            if (updates is not null)
             {
                 writer.WriteString("channel", updates.Channel);
                 writer.WriteString("feed", updates.Feed.AbsoluteUri);
@@ -39,7 +52,7 @@ public static class InstallRecord
                 }
 
                 writer.WriteEndArray();
-                writer.WriteString("main", spec.MainExecutable);
+                writer.WriteString("main", main);
             }
 
             writer.WriteEndObject();

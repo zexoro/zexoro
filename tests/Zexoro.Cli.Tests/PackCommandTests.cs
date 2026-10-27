@@ -214,7 +214,7 @@ public sealed class PackCommandTests : IDisposable
     }
 
     [Theory]
-    [InlineData("zip", "the windows format 'zip' is not implemented yet; this zexoro version packs nsis for windows")]
+    [InlineData("msi", "the windows format 'msi' is not implemented yet; this zexoro version packs nsis, zip for windows")]
     [InlineData("nsis,msi", "the windows format 'msi' is not implemented yet")]
     [InlineData("deb", "--format: 'deb' is a linux format, but the target is win-x64 (input.main: a Windows x64 executable (PE)); formats for windows: nsis, zip, msi")]
     [InlineData("nsi", "--format: unknown format 'nsi'; formats for windows: nsis, zip, msi; did you mean 'nsis'?")]
@@ -233,11 +233,11 @@ public sealed class PackCommandTests : IDisposable
     [Fact]
     public void Pack_UnimplementedFormatInConfiguration_FailsBeforePacking()
     {
-        WriteProject("[windows]\nformats = [\"nsis\", \"zip\"]\n");
+        WriteProject("[windows]\nformats = [\"nsis\", \"msi\"]\n");
 
         Assert.Equal(ExitCodes.Failure, Run("pack"));
 
-        Assert.Contains("the windows format 'zip' is not implemented yet", Stderr, StringComparison.Ordinal);
+        Assert.Contains("the windows format 'msi' is not implemented yet", Stderr, StringComparison.Ordinal);
         Assert.False(Directory.Exists(Dist));
     }
 
@@ -443,6 +443,79 @@ public sealed class PackCommandTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/beta.json", "--key", "keys/zexoro-update.key.pem", installer + ".release.json"));
         Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/beta.json"));
+    }
+
+    [Fact]
+    public void Pack_ZipWithUpdates_WritesTheArchiveAndAReleaseFragmentThatFeedAddAccepts()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\nformats = [\"zip\"]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--notes", "https://example.com/notes/1.2.3"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("for win-x64: zip", Stdout, StringComparison.Ordinal);
+        Assert.Contains("notice: [windows.signing] is not configured; the application in the zip archive is not signed.", Stdout, StringComparison.Ordinal);
+        var archive = Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.zip");
+        Assert.Equal([archive], Directory.GetFiles(Dist, "*.zip"));
+        Assert.Empty(Directory.GetFiles(Dist, "*.exe"));
+        using (var zip = System.IO.Compression.ZipFile.OpenRead(archive))
+        {
+            Assert.NotNull(zip.GetEntry("ExampleNotes/zexoro-updater.exe"));
+            Assert.NotNull(zip.GetEntry("ExampleNotes/app/ExampleNotes.exe"));
+        }
+
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(archive + ".release.json"));
+        Assert.Equal(Zexoro.Formats.Zip.WindowsZipPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("windows", "x64", "zip", "user"), artifact.Target);
+        Assert.Equal(new Uri("https://example.com/dl/stable/ExampleNotes-1.2.3-win-x64.zip"), artifact.Url);
+        Assert.Equal(new FileInfo(archive).Length, artifact.Size);
+        Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(archive))), artifact.Sha256);
+
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", archive + ".release.json"));
+    }
+
+    [Fact]
+    public void Pack_NsisAndZip_BuildsBothAndOneFeedTakesBoth()
+    {
+        PrepareUpdates();
+        WriteProject("[windows]\nformats = [\"nsis\", \"zip\"]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        var installer = Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.exe");
+        var archive = Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.zip");
+        AssertInstaller(installer);
+        Assert.True(File.Exists(archive));
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", installer + ".release.json", archive + ".release.json"));
+        var feed = File.ReadAllText(Path.Combine(_dir.FullName, "feed", "stable.json"));
+        Assert.Contains("\"format\": \"nsis\"", feed, StringComparison.Ordinal);
+        Assert.Contains("\"format\": \"zip\"", feed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Pack_ZipWithoutUpdates_WritesNoFragment()
+    {
+        WriteProject("[windows]\n");
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--format", "zip"));
+
+        Assert.True(File.Exists(Path.Combine(Dist, "ExampleNotes-1.2.3-win-x64.zip")));
+        Assert.Empty(Directory.GetFiles(Dist, "*.release.json"));
+    }
+
+    [Fact]
+    public void Pack_ZipWithUpdatesWithoutUpdater_FailsClearly()
+    {
+        PrepareUpdates();
+        File.Delete(Path.Combine(_dir.FullName, "updaters", "zexoro-updater-win-x64.exe"));
+        WriteProject("[windows]\n" + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--format", "zip"));
+
+        Assert.Contains("zexoro-updater-win-x64.exe does not exist", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist));
     }
 
     [Fact]

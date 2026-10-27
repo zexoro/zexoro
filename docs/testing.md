@@ -8,7 +8,9 @@ dotnet test
 
 They run on Linux, macOS and Windows in CI (`.github/workflows/ci.yml`, job `build`).
 
-Target detection (`ExecutableInspectorTests`) runs on small synthetic headers: PE images from `tests/Zexoro.Signing.Fixtures/Shared/TestPe.cs`, and hand-built ELF, thin Mach-O and fat Mach-O headers, including unsupported machines, wrong ELF class or byte order, and a Java class file (which shares the fat magic). `TargetConfigTests` and `PackCommandTests` cover `formats`, `[input] target`, `pack --format/--input/--main` and the "not implemented yet" refusal for every format except `nsis`.
+Target detection (`ExecutableInspectorTests`) runs on small synthetic headers: PE images from `tests/Zexoro.Signing.Fixtures/Shared/TestPe.cs`, and hand-built ELF, thin Mach-O and fat Mach-O headers, including unsupported machines, wrong ELF class or byte order, and a Java class file (which shares the fat magic). `TargetConfigTests` and `PackCommandTests` cover `formats`, `[input] target`, `pack --format/--input/--main` and the "not implemented yet" refusal for every format except `nsis` and Windows `zip`.
+
+The Windows zip (docs/design/0006-desktop-formats.md) is covered by `Zexoro.Formats.Zip.Tests` (layout, install record with and without `[updates]`, signing of the main executable and the updater, byte-identical output regardless of file times and Unix modes, MS-DOS "made by" in the central directory) and by `ZipApplyTests` in `Zexoro.Updater.Tests`, which apply archives written by the real zip writer: extraction into `app.new`, a changed `main`, leftovers of an interrupted run, a rename failure injected at every swap step (rolled back, exit 5) and a failed rollback (exit 8), a record for another app, version, format or scope (exit 5), malicious archives (absolute paths, drive letters, backslashes, `..`, `.` and empty segments, a second top-level folder, files outside it, unexpected directories, duplicates differing only in case, a Unix symlink entry, not a zip at all: exit 4, nothing written, download discarded), and a root the user cannot write to (mode 0555 on Unix, a deny ACE on Windows: exit 7, the download kept for a later apply).
 
 ## End-to-end tests
 
@@ -16,10 +18,12 @@ The end-to-end tests (docs/design/0003-mvp.md section 5) install real installers
 
 1. **Pack** (`tests/e2e/pack.sh`, any OS with bash, `openssl` and the .NET SDK). Publishes the fixture app (`tests/e2e/fixture-app`, framework-dependent `win-x64`) and packs, with a throwaway code-signing certificate and a throwaway update key:
    - `user/ZexoroE2EUser-{1.0.0,2.0.0}-win-x64.exe` and `machine/ZexoroE2EMachine-{1.0.0,2.0.0}-win-x64.exe` (signed, with `[updates]` pointing at `http://localhost:8080/<scope>/stable/`), with their release fragments `*.release.json`,
-   - `unsigned/ZexoroE2EUser-1.0.0-win-x64.exe`,
+   - `portable/ZexoroE2EPortable-{1.0.0,2.0.0}-win-x64.zip` (`formats = ["zip"]`, signed, with `[updates]` pointing at `http://localhost:8080/portable/stable/`) and their release fragments,
+   - `unsigned/ZexoroE2EUser-1.0.0-win-x64.exe` and `.zip` (one `pack --format nsis,zip` run),
+   - `repro/ZexoroE2ERepro-1.0.0-win-x64.zip`, a zip of fixed files (`[input] target = "win-x64"`, a `.cmd` entry point),
    - `root.cer`, the certificate to trust while testing,
    - `zexoro-update.pub` and `zexoro-update.key.pem`, the update key pair,
-   - `feeds/<scope>/seq1` (1.0.0 only, sequence 1), `feeds/<scope>/seq2` (1.0.0 and 2.0.0, sequence 2) and `feeds/<scope>/other-key` (signed with a key the installers do not trust), each `feed.json` plus `feed.json.sig`.
+   - `feeds/<kind>/seq1` (1.0.0 only, sequence 1), `feeds/<kind>/seq2` (1.0.0 and 2.0.0, sequence 2) and `feeds/<kind>/other-key` (signed with a key the packages do not trust), each `feed.json` plus `feed.json.sig`, for `user`, `machine` and `portable`.
 
    Version 1.0.0 contains `app\obsolete.txt`, which 2.0.0 drops.
 2. **Install** (`tests/e2e/windows/Run-E2E.ps1`, Windows PowerShell 5.1 or PowerShell 7). For each scope: silent install of 1.0.0 (files, `zexoro-install.json`, uninstall key, Start menu shortcut, Authenticode signatures of the installer, uninstaller, main executable and `zexoro-updater.exe`, the app runs), stage mode (`/S /ZEXORO_STAGE`), upgrade to 2.0.0 (stale file gone, one uninstall entry, new version), 1.0.0 again (exit code 3, nothing changed), 2.0.0 while the app runs (exit code 4), silent uninstall through `QuietUninstallString` (root, key, shortcut and updater state gone, user data kept, the `[windows.uninstall] remove` path deleted).
@@ -31,7 +35,9 @@ The end-to-end tests (docs/design/0003-mvp.md section 5) install real installers
    - `apply --wait-pid <pid> --restart` while the fixture app runs: apply waits for it, the app is then stopped, and the update finishes: `last-apply.json` reports `applied`, the app was restarted from the install, the files, `zexoro-install.json`, `DisplayVersion`, `ZexoroVersionOrder` and `EstimatedSize` (equal to the reference install) are 2.0.0, `obsolete.txt` is gone, nothing staged or `.old` is left (except `zexoro-updater.exe.old` after `replace`, which the next apply or the uninstaller removes), the downloads are cleared;
    - `check` exits 1 (up to date at 2.0.0); the uninstaller removes the install and the updater state.
 
-CI packs on Ubuntu, macOS and Windows and runs both scripts on a Windows runner for each host's installers (job `e2e-windows`).
+4. **Portable zip** (`tests/e2e/windows/Run-ZipE2E.ps1`, no administrator rights needed; with them the throwaway root is trusted for the run and signatures are checked too). Extracts the unsigned zip (one top-level folder, `app\` and the record but no updater, record `zip`/`user`/`replace` without a feed, the app runs, nothing registered), then the portable zip into a folder with a space in its path and runs the shared update scenario of 0006 section 5 against the same local feed server: `seq1` exits 1; a flipped feed byte, `other-key`, `seq1` replayed after `seq2` and a downloaded archive with one byte changed exit 4 with nothing changed; `download` and `apply --wait-pid <pid> --restart` move to 2.0.0 (record, files, `obsolete.txt` gone, nothing staged, only `zexoro-updater.exe.old` left, downloads cleared, still nothing registered, the app restarted from the extracted folder); `check` exits 1. Finally a fresh 1.0.0 copy whose folder denies the user creating files: `apply` exits 7 and changes nothing; once the folder is writable again, the kept download applies.
+
+CI packs on Ubuntu, macOS and Windows and runs the three scripts on a Windows runner for each host's packages (job `e2e-windows`). Job `reproducible` compares the three hosts' `repro/*.zip`, which must be byte-identical.
 
 ### Running locally on Windows
 
@@ -51,13 +57,14 @@ Requirements: an **elevated** PowerShell (per-machine installs, and the test tru
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File C:\temp\windows\Run-E2E.ps1 -InstallerDir C:\temp\e2e
    powershell -NoProfile -ExecutionPolicy Bypass -File C:\temp\windows\Run-UpdateE2E.ps1 -InstallerDir C:\temp\e2e
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\temp\windows\Run-ZipE2E.ps1 -InstallerDir C:\temp\e2e
    ```
 
    `-Scope user` or `-Scope machine` limits a run to one scope. Every check prints `PASS` or `FAIL`; the exit code is 1 when anything failed. The scripts remove leftovers of an interrupted earlier run before they start.
 
 ### Running over SSH
 
-Both scripts run unattended in an OpenSSH session of an administrator, which is elevated, so the per-machine installer that the updater starts through `ShellExecute` raises no UAC prompt. Use key authentication (`-o BatchMode=yes` fails instead of asking for a password):
+The scripts run unattended in an OpenSSH session of an administrator, which is elevated, so the per-machine installer that the updater starts through `ShellExecute` raises no UAC prompt. Use key authentication (`-o BatchMode=yes` fails instead of asking for a password):
 
 ```bash
 host=me@winbox                      # an administrator on the test machine
@@ -66,6 +73,7 @@ ssh -o BatchMode=yes "$host" "pwsh -NoProfile -Command \"New-Item -ItemType Dire
 scp -r artifacts/e2e tests/e2e/windows "$host:$dir/"
 ssh -o BatchMode=yes "$host" "pwsh -NoProfile -ExecutionPolicy Bypass -File $dir/windows/Run-E2E.ps1 -InstallerDir $dir/e2e"
 ssh -o BatchMode=yes "$host" "pwsh -NoProfile -ExecutionPolicy Bypass -File $dir/windows/Run-UpdateE2E.ps1 -InstallerDir $dir/e2e"
+ssh -o BatchMode=yes "$host" "pwsh -NoProfile -ExecutionPolicy Bypass -File $dir/windows/Run-ZipE2E.ps1 -InstallerDir $dir/e2e"
 ssh -o BatchMode=yes "$host" "pwsh -NoProfile -Command \"Remove-Item -Recurse -Force '$dir'\""
 ```
 

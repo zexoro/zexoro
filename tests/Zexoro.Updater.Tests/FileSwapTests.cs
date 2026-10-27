@@ -95,21 +95,21 @@ public sealed class FileSwapTests : IDisposable
         FileSwap.DeleteLeftovers(Root);
         Assert.Equal(["app/Notes.exe", "app/lib/data.txt", "notes.newer", "uninstall.exe", "zexoro-install.json", "zexoro-updater.exe"], _install.Snapshot().Keys);
     }
+}
 
-    /// <summary>Real renames, except that call number <c>failAt</c> (and <c>alsoFailAt</c>) throws.</summary>
-    private sealed class FailingMover(int failAt, int alsoFailAt = -1) : IFileMover
+/// <summary>Real renames, except that call number <c>failAt</c> (and <c>alsoFailAt</c>) throws.</summary>
+internal sealed class FailingMover(int failAt, int alsoFailAt = -1) : IFileMover
+{
+    private int _calls;
+
+    public void Move(string source, string destination)
     {
-        private int _calls;
-
-        public void Move(string source, string destination)
+        var call = _calls++;
+        if (call == failAt || call == alsoFailAt)
         {
-            var call = _calls++;
-            if (call == failAt || call == alsoFailAt)
-            {
-                throw new IOException($"injected failure renaming {Path.GetFileName(source)}");
-            }
-
-            FileMover.Instance.Move(source, destination);
+            throw new IOException($"injected failure renaming {Path.GetFileName(source)}");
         }
+
+        FileMover.Instance.Move(source, destination);
     }
 }

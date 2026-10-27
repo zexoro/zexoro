@@ -14,9 +14,10 @@ internal sealed class TestInstall : IDisposable
 
     private readonly DirectoryInfo _dir = Directory.CreateTempSubdirectory("zexoro-updater-tests-");
 
-    public TestInstall(string scope = "user", string version = "1.0.0", string main = "Notes.exe")
+    public TestInstall(string scope = "user", string version = "1.0.0", string main = "Notes.exe", string format = "nsis")
     {
         Scope = scope;
+        Format = format;
         Root = Path.Combine(_dir.FullName, "root");
         LocalAppData = Path.Combine(_dir.FullName, "localappdata");
         Temp = Path.Combine(_dir.FullName, "temp");
@@ -25,14 +26,24 @@ internal sealed class TestInstall : IDisposable
         File.WriteAllText(Path.Combine(Root, "app", main), "app " + version);
         File.WriteAllText(Path.Combine(Root, "app", "lib", "data.txt"), "data " + version);
         File.WriteAllText(Path.Combine(Root, "zexoro-updater.exe"), "updater " + version);
-        File.WriteAllText(Path.Combine(Root, "uninstall.exe"), "uninstall " + version);
         File.WriteAllBytes(Path.Combine(Root, UpdateInstallRecord.FileName), Record(version, main));
-        Registry.Entries[App] = new UninstallEntry(version, Formats.Nsis.NsisVersionOrder.Key(SemanticVersion.Parse(version)), 1);
+        if (format == "nsis")
+        {
+            File.WriteAllText(Path.Combine(Root, "uninstall.exe"), "uninstall " + version);
+            Registry.Entries[App] = new UninstallEntry(version, Formats.Nsis.NsisVersionOrder.Key(SemanticVersion.Parse(version)), 1);
+        }
+
         Processes = new FakeProcesses(this);
         Http = new HttpClient(Handler);
     }
 
     public string Scope { get; }
+
+    /// <summary>The install's format: <c>nsis</c> (registered, updated by the installer) or <c>zip</c> (portable, updated from the archive).</summary>
+    public string Format { get; }
+
+    /// <summary>The artifact's file extension.</summary>
+    public string Extension => Format == "zip" ? ".zip" : ".exe";
 
     public string Root { get; }
 
@@ -80,7 +91,7 @@ internal sealed class TestInstall : IDisposable
           "schema": 1,
           "app": "{{app ?? App}}",
           "version": "{{version}}",
-          "os": "windows", "arch": "x64", "format": "nsis", "scope": "{{Scope}}",
+          "os": "windows", "arch": "x64", "format": "{{Format}}", "scope": "{{Scope}}",
           "channel": "stable",
           "feed": "{{FeedUrl}}",
           "keys": ["{{Key.PublicKey.Text}}"],
@@ -94,8 +105,8 @@ internal sealed class TestInstall : IDisposable
     public byte[] Publish(string version, long sequence = 2, byte[]? installer = null, string? minimumUpdater = null)
     {
         installer ??= Encoding.UTF8.GetBytes("installer " + version);
-        var url = new Uri($"https://example.com/dl/Notes-{version}-win-x64.exe");
-        var artifact = new FeedArtifact(new UpdateTarget("windows", "x64", "nsis", Scope), url, installer.Length, Convert.ToHexStringLower(SHA256.HashData(installer)));
+        var url = new Uri($"https://example.com/dl/Notes-{version}-win-x64{Extension}");
+        var artifact = new FeedArtifact(new UpdateTarget("windows", "x64", Format, Scope), url, installer.Length, Convert.ToHexStringLower(SHA256.HashData(installer)));
         var release = new FeedRelease(SemanticVersion.Parse(version), [artifact], $"https://example.com/notes/{version}", minimumUpdater is null ? null : SemanticVersion.Parse(minimumUpdater));
         var feed = new UpdateFeed(App, "stable", sequence, DateTimeOffset.UnixEpoch, [release]).ToJson();
         Handler.Responses[FeedUrl.AbsoluteUri] = feed;
@@ -110,7 +121,7 @@ internal sealed class TestInstall : IDisposable
         installer ??= Encoding.UTF8.GetBytes("installer " + version);
         var state = State;
         Directory.CreateDirectory(state.Downloads);
-        var file = $"Notes-{version}-win-x64.exe";
+        var file = $"Notes-{version}-win-x64{Extension}";
         File.WriteAllBytes(Path.Combine(state.Downloads, file), installer);
         state.WriteStaged(new StagedUpdate(App, "stable", SemanticVersion.Parse(version), null, file, installer.Length,
             Convert.ToHexStringLower(SHA256.HashData(installer)), new Uri($"https://example.com/dl/{file}")));
