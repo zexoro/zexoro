@@ -131,10 +131,10 @@ inspect() {
   check "$name: the description has a synopsis and an extended part" grep -q 'End-to-end' <<< "$(field "$deb" Description)"
   check "$name: no maintainer scripts" bash -c '! dpkg-deb --info "$1" | grep -Eq " (pre|post)(inst|rm) "' _ "$deb"
   if [ "$updates" = yes ]; then
-    equal "$(field "$deb" Depends)" "libc6 (>= 2.28), libssl3t64 | libssl3 | libssl1.1, coreutils" "$name: Depends (the updater's, then [linux.deb] depends)"
+    equal "$(field "$deb" Depends)" "libc6 (>= 2.28), libssl3t64 | libssl3 | libssl1.1, coreutils (>= 8.0)" "$name: Depends (the updater's, then [linux.deb] depends)"
     equal "$(field "$deb" Recommends)" ca-certificates "$name: Recommends"
   else
-    equal "$(field "$deb" Depends)" coreutils "$name: Depends ([linux.deb] depends only)"
+    equal "$(field "$deb" Depends)" "coreutils (>= 8.0)" "$name: Depends ([linux.deb] depends only)"
   fi
   contents="$(dpkg-deb --contents "$deb")"
   echo "$contents" | sed 's/^/      /'
@@ -152,9 +152,10 @@ inspect() {
 }
 
 # Lintian errors accepted for zexoro's packages (docs/design/0006-desktop-formats.md, "As implemented
-# (step 6)"): third-party packages belong in /opt, and zexoro knows neither the application's
-# license nor its changes, so it writes no copyright file and no changelog.
-accepted_lintian='^(dir-or-file-in-opt|no-copyright-file|no-changelog|debian-changelog-file-missing)$'
+# (step 6)"): third-party packages belong in /opt; zexoro knows neither the application's license
+# nor its changes, so it writes no copyright file and no changelog; the Native AOT updater links
+# the .NET runtime's own zlib statically.
+accepted_lintian='^(dir-or-file-in-opt|no-copyright-file|no-changelog|debian-changelog-file-missing|embedded-library)$'
 
 run_lintian() {
   local deb=$1 out errors
@@ -162,7 +163,7 @@ run_lintian() {
     echo "      lintian is not installed; skipped"
     return
   fi
-  out="$(lintian --no-tag-display-limit "$deb" 2>&1 || true)"
+  out="$(lintian --tag-display-limit 0 "$deb" 2>&1 || true)"
   echo "$out" | sed 's/^/      lintian: /'
   errors="$(grep -E '^E: ' <<< "$out" | awk '{print $3}' | sort -u | grep -Ev "$accepted_lintian" || true)"
   equal "$errors" "" "lintian $(basename "$deb"): no errors besides the accepted ones"

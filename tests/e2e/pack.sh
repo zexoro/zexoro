@@ -228,7 +228,7 @@ maintainer = "zexoro e2e <e2e@zexoro.invalid>"
 categories = ["Utility"]
 
 [linux.deb]
-depends = ["coreutils"]
+depends = ["coreutils (>= 8.0)"]
 TOML
   if [ "$updates" = yes ]; then
     cat >> "$work/zexoro.toml" <<TOML
