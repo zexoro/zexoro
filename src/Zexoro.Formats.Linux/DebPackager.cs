@@ -243,7 +243,7 @@ public static class DebPackager
             : $"usr/share/pixmaps/{appId}.png";
 
     /// <summary>Adds an entry for every parent directory that has none, as dpkg-deb does.</summary>
-    private static void AddParentDirectories(List<TarItem> items)
+    internal static void AddParentDirectories(List<TarItem> items)
     {
         var present = items.Select(i => i.Name).ToHashSet(StringComparer.Ordinal);
         foreach (var name in items.Select(i => i.Name).ToList())

@@ -184,20 +184,21 @@ public static class LinuxTarPackager
     }
 
     /// <summary>
-    /// With <c>[updates]</c>, reads the glibc updater of <paramref name="architecture"/> and resolves
+    /// With <c>[updates]</c>, reads the updater of <paramref name="architecture"/> (glibc, or musl
+    /// when <paramref name="musl"/> is set) and resolves
     /// the update settings for the install record; both null without <c>[updates]</c>. Called before
     /// anything is written, so a missing updater or key file fails fast.
     /// </summary>
     /// <exception cref="LinuxPackException">The updater is not available or not valid.</exception>
     internal static (byte[]? Updater, NsisUpdates? Updates) ReadUpdater(
-        ZexoroConfig config, Architecture architecture, Func<UpdaterRuntime, UnixUpdaterBinary>? resolve, TextWriter? log)
+        ZexoroConfig config, Architecture architecture, Func<UpdaterRuntime, UnixUpdaterBinary>? resolve, TextWriter? log, bool musl = false)
     {
         if (config.Updates is not { } updatesConfig)
         {
             return (null, null);
         }
 
-        var runtime = UpdaterRuntime.Find(new TargetPlatform(OperatingSystemFamily.Linux, architecture))!;
+        var runtime = UpdaterRuntime.Find(new TargetPlatform(OperatingSystemFamily.Linux, architecture), musl)!;
         var binary = resolve?.Invoke(runtime)
             ?? throw new LinuxPackException($"[updates] is configured, but no zexoro-updater for {runtime.Rid} is available.");
         byte[] updater;
@@ -231,7 +232,7 @@ public static class LinuxTarPackager
         {
             log?.WriteLine(
                 $"warning: input.main is linked against musl ({interpreter}), but tar.gz archives are for glibc distributions "
-                + "and carry the glibc zexoro-updater; Alpine and other musl systems are served by the apk format (planned).");
+                + "and carry the glibc zexoro-updater; Alpine and other musl systems are served by the apk format.");
         }
     }
 }

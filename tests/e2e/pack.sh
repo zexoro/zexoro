@@ -20,22 +20,27 @@
 #   rpm/unsigned/zexoro-e2e-1.0.0-1.{x86_64,aarch64}.rpm unsigned rpm packages without [updates]
 #   repro/repro-1.0.0-1.x86_64.rpm                      a signed rpm of the same files (SOURCE_DATE_EPOCH fixes the signature time); likewise
 #   rpm-signing.pub.asc                                 the OpenPGP public key the rpm packages are signed with
+#   apk/zexoro-e2e-{1.0.0,2.0.0}-r0.{x86_64,aarch64}.apk apk packages (musl fixture app) signed with apk-signing/zexoro-e2e.rsa, with [updates] (and *.apk.release.json)
+#   apk/unsigned/zexoro-e2e-1.0.0-r0.{x86_64,aarch64}.apk unsigned apk packages without [updates]
+#   repro/repro-1.0.0-r0.x86_64.apk                     a signed apk of the same files; likewise
+#   zexoro-e2e.rsa.pub                                  the RSA public key the apk packages are signed with (for /etc/apk/keys)
 #   linux/links                                         present when the tar.gz inputs hold a symbolic link
 #                                                       (app/bin/version.txt -> ../version.txt; not on Windows hosts)
 #   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #   zexoro-update.pub                                   the update public key the installers trust
 #   zexoro-update.key.pem                               its (throwaway) private key, to publish more feeds while testing
-#   feeds/{user,machine,portable,tar,deb,rpm}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
-#   feeds/{user,machine,portable,tar,deb,rpm}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
-#   feeds/{user,machine,portable,tar,deb,rpm}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
-#   (feeds/tar/*, feeds/deb/* and feeds/rpm/* list the x64 and arm64 packages of each version)
+#   feeds/{user,machine,portable,tar,deb,rpm,apk}/seq1/feed.json{,.sig}       signed feed with 1.0.0 only (sequence 1)
+#   feeds/{user,machine,portable,tar,deb,rpm,apk}/seq2/feed.json{,.sig}       signed feed with 1.0.0 and 2.0.0 (sequence 2)
+#   feeds/{user,machine,portable,tar,deb,rpm,apk}/other-key/feed.json{,.sig}  like seq2, but signed with a key the installs do not trust
+#   (feeds/tar/*, feeds/deb/*, feeds/rpm/* and feeds/apk/* list the x64 and arm64 packages of each version)
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
 # The packages' [updates] point at http://localhost:8080/<kind>/stable/, where
 # tests/e2e/windows/Run-UpdateE2E.ps1 (user, machine), Run-ZipE2E.ps1 (portable) and
-# tests/e2e/unix/run-tar-e2e.sh (tar), run-deb-e2e.sh (deb) and run-rpm-e2e.sh (rpm) serve the feeds
-# and packages. The rpm signing key is a committed throwaway key (tests/e2e/rpm-signing/, password
-# e2e-password), so every pack host signs with the same key.
+# tests/e2e/unix/run-tar-e2e.sh (tar), run-deb-e2e.sh (deb), run-rpm-e2e.sh (rpm) and run-apk-e2e.sh
+# (apk) serve the feeds and packages. The rpm and apk signing keys are committed throwaway keys
+# (tests/e2e/rpm-signing/, password e2e-password; tests/e2e/apk-signing/), so every pack host signs
+# with the same keys.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -67,13 +72,13 @@ case "$(uname -s)" in
   *) links=yes ;;
 esac
 
-echo "== Publishing the fixture app (framework-dependent, linux-x64 and linux-arm64)"
-for arch in x64 arm64; do
-  dotnet publish "$here/fixture-app" -c Release -r "linux-$arch" --self-contained false -o "$work/publish-linux-$arch" -nologo -v quiet
+echo "== Publishing the fixture app (framework-dependent, linux-x64, linux-arm64, linux-musl-x64 and linux-musl-arm64)"
+for rid in linux-x64 linux-arm64 linux-musl-x64 linux-musl-arm64; do
+  dotnet publish "$here/fixture-app" -c Release -r "$rid" --self-contained false -o "$work/publish-$rid" -nologo -v quiet
   for version in 1.0.0 2.0.0; do
-    dir="$work/input-linux-$arch/$version"
+    dir="$work/input-$rid/$version"
     mkdir -p "$dir/bin"
-    cp -R "$work/publish-linux-$arch/." "$dir/"
+    cp -R "$work/publish-$rid/." "$dir/"
     rm -f "$dir"/*.pdb
     printf '%s\n' "$version" > "$dir/version.txt"
     # A script without an execute bit on disk: the archive must make it executable (#!).
@@ -81,7 +86,7 @@ for arch in x64 arm64; do
     chmod 644 "$dir/bin/helper.sh"
     if [ "$links" = yes ]; then ln -s ../version.txt "$dir/bin/version.txt"; fi
   done
-  printf 'removed by version 2.0.0\n' > "$work/input-linux-$arch/1.0.0/obsolete.txt"
+  printf 'removed by version 2.0.0\n' > "$work/input-$rid/1.0.0/obsolete.txt"
 done
 
 echo "== Creating a throwaway code-signing certificate"
@@ -315,6 +320,63 @@ for arch in x64 arm64; do
   grep -q "notice: \[linux.rpm.signing\] is not configured; the rpm is unsigned" "$work/rpm-unsigned.log"
 done
 
+# apk_config <version> <arch> <signed with [updates]: yes|no>: writes $work/zexoro.toml for the apk package.
+apk_config() {
+  local version=$1 arch=$2 signed=$3
+  cat > "$work/zexoro.toml" <<TOML
+[app]
+id          = "dev.zexoro.e2e.apk"
+name        = "Zexoro E2E Apk"
+version     = "$version"
+publisher   = "zexoro e2e"
+icon        = "app.ico"
+description = "End-to-end test application\nPackaged by tests/e2e/pack.sh to test zexoro's apk packages."
+url         = "https://github.com/zexoro/zexoro"
+
+[input]
+dir  = "input-linux-musl-$arch/$version"
+main = "FixtureApp"
+
+[linux]
+formats    = ["apk"]
+package    = "zexoro-e2e"
+maintainer = "zexoro e2e <e2e@zexoro.invalid>"
+categories = ["Utility"]
+
+[linux.apk]
+depends = ["busybox"]
+license = "MIT"
+TOML
+  if [ "$signed" = yes ]; then
+    cat >> "$work/zexoro.toml" <<TOML
+
+[linux.apk.signing]
+key      = { env = "E2E_APK_KEY" }
+key_name = "zexoro-e2e.rsa.pub"
+
+[updates]
+feed     = "http://localhost:8080/apk/{channel}/feed.json"
+download = "http://localhost:8080/apk/{channel}/{file}"
+keys     = [{ file = "keys/zexoro-update.pub" }]
+TOML
+  fi
+}
+
+E2E_APK_KEY="$(cat "$here/apk-signing/zexoro-e2e.rsa")"
+export E2E_APK_KEY
+cp "$here/apk-signing/zexoro-e2e.rsa.pub" "$out/zexoro-e2e.rsa.pub"
+for arch in x64 arm64; do
+  for version in 1.0.0 2.0.0; do
+    echo "== Packing apk $version linux-musl-$arch (signed)"
+    apk_config "$version" "$arch" yes
+    (cd "$work" && "$cli" pack --output "$out/apk")
+  done
+  echo "== Packing apk 1.0.0 linux-musl-$arch (unsigned, without [updates])"
+  apk_config 1.0.0 "$arch" no
+  (cd "$work" && "$cli" pack --output "$out/apk/unsigned") | tee "$work/apk-unsigned.log"
+  grep -q "notice: \[linux.apk.signing\] is not configured; the apk is unsigned" "$work/apk-unsigned.log"
+done
+
 echo "== Packing a zip and a tar.gz of fixed files (reproducibility across pack hosts)"
 mkdir -p "$work/repro/bin/empty"
 printf '@echo off\r\necho repro\r\n' > "$work/repro/bin/run.cmd"
@@ -347,6 +409,10 @@ grep -q 'target = "linux-x64"' "$work/repro/linux.toml"
 cp "$here/rpm-signing/rpm-signing.key.asc" "$work/repro/rpm-signing.key.asc"
 printf '\n[linux.rpm.signing]\nkey      = "rpm-signing.key.asc"\npassword = "e2e-password"\n' >> "$work/repro/linux.toml"
 (cd "$work/repro" && SOURCE_DATE_EPOCH=1780000000 "$cli" pack --config linux.toml --format rpm --output "$out/repro")
+# A signed apk: RSA PKCS #1 v1.5 signatures are deterministic, so no time needs fixing.
+cp "$here/apk-signing/zexoro-e2e.rsa" "$work/repro/zexoro-e2e.rsa"
+printf '\n[linux.apk.signing]\nkey      = "zexoro-e2e.rsa"\nkey_name = "zexoro-e2e.rsa.pub"\n' >> "$work/repro/linux.toml"
+(cd "$work/repro" && "$cli" pack --config linux.toml --format apk --output "$out/repro")
 
 echo "== Installers"
 (cd "$out" && find . -type f | sort)
@@ -378,7 +444,15 @@ for rpmarch in x86_64 aarch64; do
   done
   test -f "$out/rpm/unsigned/zexoro-e2e-1.0.0-1.$rpmarch.rpm" || { echo "missing rpm/unsigned/zexoro-e2e-1.0.0-1.$rpmarch.rpm" >&2; exit 1; }
 done
-for f in repro/repro-1.0.0-1.x86_64.rpm repro/repro_1.0.0_amd64.deb unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
+for apkarch in x86_64 aarch64; do
+  for version in 1.0.0 2.0.0; do
+    f="apk/zexoro-e2e-$version-r0.$apkarch.apk"
+    test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
+    test -f "$out/$f.release.json" || { echo "missing $f.release.json" >&2; exit 1; }
+  done
+  test -f "$out/apk/unsigned/zexoro-e2e-1.0.0-r0.$apkarch.apk" || { echo "missing apk/unsigned/zexoro-e2e-1.0.0-r0.$apkarch.apk" >&2; exit 1; }
+done
+for f in repro/repro-1.0.0-r0.x86_64.apk repro/repro-1.0.0-1.x86_64.rpm repro/repro_1.0.0_amd64.deb unsigned/ZexoroE2EUser-1.0.0-win-x64.exe unsigned/ZexoroE2EUser-1.0.0-win-x64.zip repro/ZexoroE2ERepro-1.0.0-win-x64.zip \
   repro/ZexoroE2ERepro-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-x64.tar.gz linux/no-updates/ZexoroE2ETar-1.0.0-linux-arm64.tar.gz; do
   test -f "$out/$f" || { echo "missing $f" >&2; exit 1; }
 done
@@ -386,7 +460,7 @@ if ls "$out"/portable/*.exe >/dev/null 2>&1; then
   echo "formats = [\"zip\"] also built an installer" >&2
   exit 1
 fi
-if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json "$out"/deb/no-updates/*.release.json "$out"/rpm/unsigned/*.release.json >/dev/null 2>&1; then
+if ls "$out"/unsigned/*.release.json "$out"/repro/*.release.json "$out"/linux/no-updates/*.release.json "$out"/deb/no-updates/*.release.json "$out"/rpm/unsigned/*.release.json "$out"/apk/unsigned/*.release.json >/dev/null 2>&1; then
   echo "a package without [updates] got a release fragment" >&2
   exit 1
 fi
@@ -394,7 +468,7 @@ fi
 echo "== Publishing signed feeds (one per application)"
 "$cli" keys new --output "$work/keys" --name other
 cp "$work/keys/zexoro-update.key.pem" "$out/zexoro-update.key.pem"
-for scope in user machine portable tar deb rpm; do
+for scope in user machine portable tar deb rpm apk; do
   title="$(printf '%s' "${scope:0:1}" | tr '[:lower:]' '[:upper:]')${scope:1}"
   if [ "$scope" = tar ]; then
     # Both architectures of each version: one release with two artifacts.
@@ -406,6 +480,9 @@ for scope in user machine portable tar deb rpm; do
   elif [ "$scope" = rpm ]; then
     v1=("$out"/rpm/zexoro-e2e-1.0.0-1.*.rpm.release.json)
     v2=("$out"/rpm/zexoro-e2e-2.0.0-1.*.rpm.release.json)
+  elif [ "$scope" = apk ]; then
+    v1=("$out"/apk/zexoro-e2e-1.0.0-r0.*.apk.release.json)
+    v2=("$out"/apk/zexoro-e2e-2.0.0-r0.*.apk.release.json)
   else
     extension=$([ "$scope" = portable ] && echo zip || echo exe)
     v1=("$out/$scope/ZexoroE2E$title-1.0.0-win-x64.$extension.release.json")

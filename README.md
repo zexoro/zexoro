@@ -2,7 +2,7 @@
 
 Package applications built with any technology into native installers, and keep them up to date.
 
-> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS), portable Windows zip archives, portable Linux tar.gz archives, Debian packages (deb) and signed rpm packages from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
+> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS), portable Windows zip archives, portable Linux tar.gz archives, Debian packages (deb), signed rpm packages and signed Alpine packages (apk) from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
 
 ## Install
 
@@ -37,8 +37,8 @@ zexoro init      # writes a commented zexoro.toml into the current directory
 zexoro doctor    # checks the configuration, the files it names, the certificate and the bundled NSIS
 zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe (and .zip with formats = ["nsis", "zip"]),
                  # or dist/<name>-<version>-linux-<arch>.tar.gz for a Linux build output
-                 # (and dist/<pkg>_<version>_<arch>.deb and dist/<pkg>-<version>-1.<arch>.rpm
-                 #  with formats = ["tar.gz", "deb", "rpm"])
+                 # (and dist/<pkg>_<version>_<arch>.deb, dist/<pkg>-<version>-1.<arch>.rpm and
+                 #  dist/<pkg>-<version>-r0.<arch>.apk with formats = ["tar.gz", "deb", "rpm", "apk"])
 ```
 
 `zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. `--input <dir>` and `--main <path>` replace `input.dir` and `input.main` (relative to the current directory and to the input directory), so one configuration can serve a CI matrix of build outputs, and `--format <f>[,<f>...]` replaces the formats of the target platform's table. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
@@ -51,7 +51,7 @@ zexoro packages build output; it never builds your application. One `pack` run p
 | ELF, 64-bit little-endian, for x86-64 or AArch64 | `linux-x64`, `linux-arm64` |
 | Mach-O for x86_64 or arm64; a universal binary with both slices | `osx-x64`, `osx-arm64`; `osx-universal` |
 
-An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` and Linux `tar.gz`, `deb` and `rpm` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
+An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` and Linux `tar.gz`, `deb`, `rpm` and `apk` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
 
 ## Configuration
 
@@ -107,13 +107,13 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 
 ### `[linux]` and `[macos]` (optional)
 
-Used when the target is Linux or macOS. Linux `tar.gz`, `deb` and `rpm` are implemented; the other Linux formats and every macOS format are not yet, but the tables accept their names already.
+Used when the target is Linux or macOS. Linux `tar.gz`, `deb`, `rpm` and `apk` are implemented; `appimage` and every macOS format are not yet, but the tables accept their names already.
 
 | Table | Key | Type | Default | Description |
 | --- | --- | --- | --- | --- |
-| `[linux]` | `formats` | array of `"tar.gz"`, `"appimage"`, `"deb"`, `"rpm"`, `"apk"` | `["tar.gz"]` | `tar.gz` is a [portable archive](#the-portable-targz), `deb` a [Debian package](#the-deb-package), `rpm` an [rpm package](#the-rpm-package). |
+| `[linux]` | `formats` | array of `"tar.gz"`, `"appimage"`, `"deb"`, `"rpm"`, `"apk"` | `["tar.gz"]` | `tar.gz` is a [portable archive](#the-portable-targz), `deb` a [Debian package](#the-deb-package), `rpm` an [rpm package](#the-rpm-package), `apk` an [Alpine package](#the-apk-package). |
 | `[linux]` | `icon` | path | the largest image of `app.icon` | A PNG icon for Linux formats. Without it, `app.icon` is used: a PNG as it is, from an ICO the largest image (bitmaps are converted to PNG). |
-| `[linux]` | `package` | string | last segment of `app.id`, lower-cased | The package name of the deb, rpm and apk formats (apk is not implemented yet): lower-case letters, digits, `+`, `-` and `.`, at least two characters, starting with a letter or digit. |
+| `[linux]` | `package` | string | last segment of `app.id`, lower-cased | The package name of the deb, rpm and apk formats: lower-case letters, digits, `+`, `-` and `.`, at least two characters, starting with a letter or digit. |
 | `[linux]` | `categories` | array of strings | `[]` | The `Categories` of the `.desktop` launcher that deb, rpm and apk packages install, for example `["Office"]`. |
 | `[linux]` | `maintainer` | string | `app.publisher` | The package maintainer of deb, rpm and apk packages, conventionally `"Name <email>"`; one line. |
 | `[linux.deb]` | `depends` | array of strings | `[]` | Relations for the deb's `Depends`, written verbatim, for example `["libicu74 \| libicu72"]`. With `[updates]`, zexoro puts the updater's own dependencies first (see [the deb package](#the-deb-package)). |
@@ -121,11 +121,15 @@ Used when the target is Linux or macOS. Linux `tar.gz`, `deb` and `rpm` are impl
 | `[linux.rpm]` | `license` | string | none | The rpm's `License`, conventionally an SPDX expression such as `"MIT"`. Without it the tag is left out (with a notice): zexoro does not guess your license. |
 | `[linux.rpm.signing]` | `key` | string or `{ env = "NAME" }` | none | The OpenPGP secret key rpm packages are signed with: the ASCII-armored key itself (`gpg --export-secret-keys --armor <key ID>`, usually from an environment variable) or the path of a file holding it. RSA only (2048 bits or more); without the table packages are unsigned, with a notice. |
 | `[linux.rpm.signing]` | `password` | string or `{ env = "NAME" }` | none | The key's passphrase, when it has one. |
+| `[linux.apk]` | `depends` | array of strings | `[]` | Dependencies for the apk, one apk dependency per entry without spaces: `"icu-libs"`, `"so:libicuuc.so.74"`, `"icu-libs>=74"`. With `[updates]`, zexoro adds the updater's own (see [the apk package](#the-apk-package)). |
+| `[linux.apk]` | `license` | string | none | The apk's `license`, conventionally an SPDX expression. Without it the field is left out (with a notice). |
+| `[linux.apk.signing]` | `key` | string or `{ env = "NAME" }` | none | The RSA private key apk packages are signed with, PEM (what `abuild-keygen` or `openssl genrsa` writes, unencrypted, 2048 bits or more): the key itself (usually from an environment variable) or the path of a file holding it. Without the table packages are unsigned, with a notice. |
+| `[linux.apk.signing]` | `key_name` | string | required with `key` | The file name of the public key in `/etc/apk/keys`, for example `"dev@example.com-6123abcd.rsa.pub"`; apk finds the key by it. |
 | `[macos]` | `formats` | array of `"zip"`, `"dmg"`, `"pkg"` | `["zip"]` | |
 
 ### `[updates]` (optional)
 
-Makes installers and portable archives updatable: they then include `zexoro-updater.exe` (`zexoro-updater` in a tar.gz, deb or rpm), record where to look for updates, and `pack` writes a release fragment `<package>.release.json` next to each package for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, packages have no updater.
+Makes installers and portable archives updatable: they then include `zexoro-updater.exe` (`zexoro-updater` in a tar.gz, deb, rpm or apk), record where to look for updates, and `pack` writes a release fragment `<package>.release.json` next to each package for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, packages have no updater.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -196,7 +200,7 @@ For a Linux target (an ELF main executable, or `[input] target = "linux-x64"`/`"
 
 Modes are normalized so the archive does not depend on your umask: directories and executables 0755, other files 0644. A file is executable when it is `input.main`, starts with an ELF header or `#!`, or has an execute bit on a Linux or macOS packing host; packing on Windows, which has no execute bits, relies on the first three. Symbolic links are kept when their target is relative and stays inside the input directory; any other link is an error. Like the zip, the archive is reproducible (sorted entries, every timestamp 1980-02-01 00:00, owner and group 0 without names, GNU tar format), so the same files give the same bytes on Linux, macOS and Windows.
 
-The archive carries the **glibc** updater of its architecture. zexoro cannot tell glibc from musl builds by their headers, and the feed could not tell two such archives apart, so tar.gz is for glibc distributions; `pack` warns when the main executable needs musl's loader. Alpine and other musl systems will be served by the apk format.
+The archive carries the **glibc** updater of its architecture. zexoro cannot tell glibc from musl builds by their headers, and the feed could not tell two such archives apart, so tar.gz is for glibc distributions; `pack` warns when the main executable needs musl's loader. Alpine and other musl systems are served by the [apk package](#the-apk-package).
 
 ## The deb package
 
@@ -235,9 +239,26 @@ Users import the public key once with `sudo rpm --import rpm-signing.pub.asc`; `
 
 Updates work as for the deb (strategy `notify`): `check` reports the new package's `url`, `download` and `apply` exit 7, and the user upgrades with `sudo dnf upgrade ./<new>.rpm` or `sudo zypper install ./<new>.rpm`.
 
+## The apk package
+
+With `formats = ["apk"]` (or `pack --format apk`), `pack` writes an Alpine package `<pkg>-<version>-r0.<arch>.apk` (`x86_64` or `aarch64`; abuild names its files without the architecture, which zexoro adds so both architectures fit into one GitHub release). Alpine uses musl, so build your application for `linux-musl-x64` or `linux-musl-arm64`; `pack` warns when the main executable needs glibc. The version is `app.version` with the release `r0`; apk versions allow only certain pre-release suffixes, so only the pre-releases `alpha.N`, `beta.N` and `rc.N` are supported (`1.2.3-beta.1` becomes `1.2.3_beta1`, which apk orders before `1.2.3`; build metadata is dropped) and `pack` refuses others. Users install it with `sudo apk add ./<file>.apk`; it installs the same files as the deb, under `/opt/<pkg>/` (record format `apk`), `/usr/bin/<pkg>`, the `.desktop` file and the icon, and a directory entry for each parent directory, as apk requires. There are no install scripts.
+
+The package is apk's v2 format, which current Alpine releases install with apk-tools 2 and 3: three gzip streams (signature, control, data) that together form one tar archive, `.PKGINFO` with `pkgname`, `pkgver`, `pkgdesc` (the first line of `app.description`, or `app.name`), `url`, `builddate` (fixed), `packager` and `maintainer` (`[linux] maintainer`, else `app.publisher`), `size`, `arch`, `origin`, `license`, `depend` lines and the SHA-256 `datahash` of the data, and per-file SHA-1 checksums as abuild writes them. With `[updates]`, the package carries the musl build of `zexoro-updater` and depends on what it needs: `so:libc.musl-<arch>.so.1`, `so:libcrypto.so.3` and `so:libssl.so.3` (OpenSSL) and `ca-certificates-bundle`, all part of Alpine's base image, followed by your [`[linux.apk] depends`](#linux-and-macos-optional). zexoro writes the whole package itself (no `abuild` needed), and it is reproducible, signed or not.
+
+**Signing.** apk refuses packages without a trusted signature unless given `--allow-untrusted`. With [`[linux.apk.signing]`](#linux-and-macos-optional), the control segment is signed with your RSA key (RSA with SHA-256, the `.SIGN.RSA256.<key_name>` entry that `abuild-sign -t RSA256` writes). Create a key with `abuild-keygen` or openssl:
+
+```bash
+openssl genrsa -out dev@example.com-6123abcd.rsa 4096                               # keep secret: put it in a CI secret
+openssl rsa -in dev@example.com-6123abcd.rsa -pubout -out dev@example.com-6123abcd.rsa.pub   # publish for your users
+```
+
+Set `key_name = "dev@example.com-6123abcd.rsa.pub"`; users copy the public key to `/etc/apk/keys/` under exactly that name, after which `apk verify <file>.apk` reports it as OK and `apk add` installs it. `zexoro doctor` checks that the key loads.
+
+Updates work as for the deb (strategy `notify`): `check` reports the new package's `url`, `download` and `apply` exit 7, and the user upgrades with `sudo apk add ./<new>.apk`.
+
 ## Automatic updates
 
-Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz, deb or rpm, and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
+Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz, deb, rpm or apk, and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
 zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
@@ -258,7 +279,7 @@ zexoro-updater download [--json]                       # downloads and verifies 
 zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 ```
 
-`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. Installs owned by a package manager (deb, rpm) are only checked: `download` and `apply` exit 7 without touching anything, and the user installs the new package (its `url` is in `check --json`). One feed can carry the installer, the zip, the tar.gz archives and the deb and rpm packages of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`).
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. Installs owned by a package manager (deb, rpm, apk) are only checked: `download` and `apply` exit 7 without touching anything, and the user installs the new package (its `url` is in `check --json`). One feed can carry the installer, the zip, the tar.gz archives and the deb, rpm and apk packages of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`).
 
 ## zexoro exit codes
 

@@ -356,10 +356,12 @@ public sealed class LinuxConfig : PlatformConfig
         IReadOnlyList<string> categories,
         string? maintainer,
         LinuxDebConfig deb,
-        LinuxRpmConfig rpm)
+        LinuxRpmConfig rpm,
+        LinuxApkConfig apk)
         : base(OperatingSystemFamily.Linux, isConfigured, formats)
     {
         Rpm = rpm;
+        Apk = apk;
         Package = package;
         Icon = icon;
         Categories = categories;
@@ -390,6 +392,9 @@ public sealed class LinuxConfig : PlatformConfig
 
     /// <summary><c>[linux.rpm]</c>; empty when absent.</summary>
     public LinuxRpmConfig Rpm { get; }
+
+    /// <summary><c>[linux.apk]</c>; empty when absent.</summary>
+    public LinuxApkConfig Apk { get; }
 
     /// <summary>The package maintainer: <see cref="Maintainer"/>, or <paramref name="app"/>'s publisher.</summary>
     public string MaintainerOf(AppConfig app)
@@ -493,6 +498,100 @@ public sealed class RpmSigningConfig
     /// <summary>Resolves <see cref="Password"/>, or returns null when none is configured.</summary>
     /// <exception cref="ConfigurationException">A referenced environment variable is not set.</exception>
     public string? ResolvePassword(Func<string, string?>? environment = null) => Password?.Resolve(environment);
+}
+
+/// <summary><c>[linux.apk]</c>: settings of the apk package only.</summary>
+public sealed class LinuxApkConfig
+{
+    internal LinuxApkConfig(IReadOnlyList<string> depends, string? license, ApkSigningConfig? signing)
+    {
+        Depends = depends;
+        License = license;
+        Signing = signing;
+    }
+
+    /// <summary>
+    /// <c>depends</c>: dependencies for <c>.PKGINFO</c>, one apk dependency each (<c>name</c>,
+    /// <c>so:libname.so.N</c>, <c>name&gt;=version</c>, …), written verbatim, in order.
+    /// </summary>
+    public IReadOnlyList<string> Depends { get; }
+
+    /// <summary><c>license</c>: <c>.PKGINFO</c>'s <c>license</c> (an SPDX expression by convention), or null to leave it out.</summary>
+    public string? License { get; }
+
+    /// <summary><c>[linux.apk.signing]</c>, or null to build unsigned packages.</summary>
+    public ApkSigningConfig? Signing { get; }
+
+    /// <summary>
+    /// Returns why <paramref name="keyName"/> cannot name a public key in <c>/etc/apk/keys</c>, or
+    /// null when it can: one file name of printable ASCII characters without spaces or '/', at
+    /// most 80 characters (the signature entry <c>.SIGN.RSA256.&lt;key_name&gt;</c> then fits a tar
+    /// header's 100-byte name).
+    /// </summary>
+    public static string? ValidateKeyName(string keyName)
+    {
+        ArgumentNullException.ThrowIfNull(keyName);
+        if (keyName.Length == 0 || keyName is "." or "..")
+        {
+            return "is not a file name; use the name of the public key file users install into /etc/apk/keys, such as 'dev@example.com-6123abcd.rsa.pub'";
+        }
+
+        if (keyName.Any(c => c is <= ' ' or >= '\u007f' or '/'))
+        {
+            return "must be a file name of printable ASCII characters without spaces or '/', such as 'dev@example.com-6123abcd.rsa.pub'";
+        }
+
+        return keyName.Length > 80 ? "is longer than 80 characters" : null;
+    }
+}
+
+/// <summary><c>[linux.apk.signing]</c>: the RSA key apk packages are signed with, as <c>abuild-sign</c> uses it.</summary>
+public sealed class ApkSigningConfig
+{
+    private readonly string _baseDirectory;
+
+    internal ApkSigningConfig(string baseDirectory, ConfigValue key, string keyName)
+    {
+        _baseDirectory = baseDirectory;
+        Key = key;
+        KeyName = keyName;
+    }
+
+    /// <summary>
+    /// <c>key</c>: the PEM-encoded RSA private key itself (usually <c>{ env = "…" }</c>), or the
+    /// path of a PEM file, relative to the configuration directory.
+    /// </summary>
+    public ConfigValue Key { get; }
+
+    /// <summary>
+    /// <c>key_name</c>: the file name of the public key in <c>/etc/apk/keys</c>, which apk looks
+    /// the signature's key up by (abuild-keygen writes <c>&lt;email&gt;-&lt;hex&gt;.rsa.pub</c>).
+    /// </summary>
+    public string KeyName { get; }
+
+    /// <summary>Returns the PEM text: the value itself when it holds a PEM block (<c>-----BEGIN</c>), else the contents of the file it names.</summary>
+    /// <exception cref="ConfigurationException">A referenced environment variable is not set, or the file cannot be read.</exception>
+    public string ResolveKey(Func<string, string?>? environment = null)
+    {
+        var value = Key.Resolve(environment);
+        if (value.Contains("-----BEGIN", StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        var path = ConfigReader.ResolvePath(_baseDirectory, value.Trim());
+        try
+        {
+            return File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new ConfigurationException([new ConfigError(
+                $"{Key.Key}: the value is neither a PEM private key ('-----BEGIN PRIVATE KEY-----') nor a readable key file ({path}: {ex.Message})",
+                Key.Source,
+                Key.Position)]);
+        }
+    }
 }
 
 /// <summary><c>[macos]</c>: macOS package settings.</summary>
