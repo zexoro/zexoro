@@ -32,6 +32,7 @@ public sealed class PackCommandTests : IDisposable
     private readonly StringWriter _stdout = new();
     private readonly StringWriter _stderr = new();
     private readonly Dictionary<string, string> _variables = [];
+    private readonly List<string> _stagings = [];
 
     public PackCommandTests()
     {
@@ -43,6 +44,10 @@ public sealed class PackCommandTests : IDisposable
         _stdout.Dispose();
         _stderr.Dispose();
         _dir.Delete(recursive: true);
+        foreach (var staging in _stagings)
+        {
+            Directory.Delete(staging, recursive: true);
+        }
     }
 
     private string Stdout => _stdout.ToString();
@@ -411,5 +416,68 @@ public sealed class PackCommandTests : IDisposable
         var output = Stdout + Stderr;
         Assert.Contains("updates: channel stable, feed https://example.com/updates/stable/feed.json, 1 trusted key(s)", output, StringComparison.Ordinal);
         Assert.Matches("(?m)^error +updater: .*zexoro-updater-win-x86.exe does not exist", output);
+    }
+
+    [Fact]
+    public void Pack_WithCertificateAndUpdates_SignsTheUpdater()
+    {
+        PrepareUpdates();
+        using var certificate = TestCertificates.CreateSelfSigned(ecdsa: false);
+        WriteFile("cert.pfx", certificate.Export(X509ContentType.Pkcs12, "pfx-pass"));
+        _variables["CERT_PASSWORD"] = "pfx-pass";
+        WriteProject("""
+            [windows]
+
+            [windows.signing]
+            certificate = "cert.pfx"
+            password = { env = "CERT_PASSWORD" }
+
+            """ + UpdatesTable);
+
+        Assert.Equal(ExitCodes.Success, Run("pack"));
+
+        Assert.Contains("Signing zexoro-updater.exe", Stdout, StringComparison.Ordinal);
+
+        // The staged copy, as it goes into the installer: signed with the application's certificate.
+        var staged = PackKeepingStaging(withSigning: true);
+        var updater = File.ReadAllBytes(Path.Combine(staged, NsisInstallerSpec.UpdaterFileName));
+        Assert.True(AuthenticodeSigner.IsSigned(Path.Combine(staged, NsisInstallerSpec.UpdaterFileName)));
+        var entry = TestPe.CertificateEntryOffset(pe32Plus: true);
+        var offset = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(updater.AsSpan(entry));
+        var size = System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(updater.AsSpan(entry + 4));
+        Assert.True(updater.AsSpan(offset, size).IndexOf(certificate.RawData) >= 0, "the signature does not carry the application's certificate");
+
+        // The source in ZEXORO_UPDATER_DIR is left alone, and an unsigned build ships it unsigned.
+        Assert.False(AuthenticodeSigner.IsSigned(Path.Combine(_dir.FullName, "updaters", "zexoro-updater-win-x64.exe")));
+        var unsigned = PackKeepingStaging(withSigning: false);
+        Assert.False(AuthenticodeSigner.IsSigned(Path.Combine(unsigned, NsisInstallerSpec.UpdaterFileName)));
+    }
+
+    /// <summary>Packs the current project with <see cref="NsisPackager"/> directly and returns the kept staging directory.</summary>
+    private string PackKeepingStaging(bool withSigning)
+    {
+        var environment = new CliEnvironment(_dir.FullName, name => _variables.GetValueOrDefault(name)) { ZexoroCommand = DotnetZexoroCommand() };
+        var config = Zexoro.Configuration.ZexoroConfig.Load(Path.Combine(_dir.FullName, "zexoro.toml"));
+        using var credential = SigningCredential.LoadPfx(Path.Combine(_dir.FullName, "cert.pfx"), "pfx-pass");
+        var result = NsisPackager.Pack(new NsisPackRequest
+        {
+            Config = config,
+            Toolset = Toolsets.BundledToolsets.ResolveNsis(environment),
+            OutputDirectory = Path.Combine(_dir.FullName, withSigning ? "signed" : "unsigned"),
+            Signing = withSigning
+                ? new NsisSigning
+                {
+                    Credential = credential,
+                    CertificatePath = Path.Combine(_dir.FullName, "cert.pfx"),
+                    Password = "pfx-pass",
+                    ZexoroCommand = environment.ZexoroCommand,
+                }
+                : null,
+            ResolveUpdater = architecture => Toolsets.BundledUpdaters.Resolve(architecture, environment),
+            KeepStaging = true,
+        });
+        Assert.NotNull(result.StagingDirectory);
+        _stagings.Add(result.StagingDirectory);
+        return result.StagingDirectory;
     }
 }
