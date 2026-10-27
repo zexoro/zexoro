@@ -61,6 +61,12 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
             return UpdaterResult.Fail(UpdaterExitCodes.For(ex.Kind), ex.Message);
         }
 
+        if (record.Strategy == Notify.Strategy)
+        {
+            // The package manager owns the install: nothing is touched, not even the updater's state.
+            return Notify.ManualUpdate(record, "apply");
+        }
+
         var state = new UpdaterState(environment.StateBase, record.App);
         var result = options.FromRoot is null ? HandOff(root, record, state, options) : Apply(root, record, state, options);
         if (!result.Relayed)

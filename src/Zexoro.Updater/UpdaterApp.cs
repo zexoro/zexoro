@@ -19,6 +19,8 @@ internal static class UpdaterApp
                      application afterwards.
 
         --json writes one JSON object to standard output; messages go to standard error.
+        Installs owned by a package manager (deb, rpm, apk) are only checked: download
+        and apply exit 7, and the new package is installed with the package manager.
 
         Exit codes: 0 update available / downloaded / applied, 1 up to date or nothing
         downloaded, 2 usage error, 3 network failure, 4 verification failed, 5 apply failed

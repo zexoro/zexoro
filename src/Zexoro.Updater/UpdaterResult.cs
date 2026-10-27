@@ -58,6 +58,9 @@ internal sealed record UpdaterResult(int ExitCode, string Status, string Message
 
     public long? Size { get; init; }
 
+    /// <summary>The artifact's URL from the signed feed, so the application can link to it (strategy notify).</summary>
+    public string? Url { get; init; }
+
     /// <summary>True when another updater process already reported the outcome (the copy that applied it).</summary>
     public bool Relayed { get; init; }
 
@@ -83,6 +86,7 @@ internal sealed record UpdaterResult(int ExitCode, string Status, string Message
                 writer.WriteNull("size");
             }
 
+            WriteOptional(writer, "url", Url);
             WriteOptional(writer, "error", Status == Error ? Message : null);
             writer.WriteNumber("exitCode", ExitCode);
             writer.WriteEndObject();

@@ -348,12 +348,15 @@ public sealed class WindowsConfig : PlatformConfig
 /// <summary><c>[linux]</c>: Linux package settings.</summary>
 public sealed class LinuxConfig : PlatformConfig
 {
-    internal LinuxConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats, string? package, ConfigPath? icon, IReadOnlyList<string> categories)
+    internal LinuxConfig(
+        bool isConfigured, IReadOnlyList<PackageFormat> formats, string? package, ConfigPath? icon, IReadOnlyList<string> categories, string? maintainer, LinuxDebConfig deb)
         : base(OperatingSystemFamily.Linux, isConfigured, formats)
     {
         Package = package;
         Icon = icon;
         Categories = categories;
+        Maintainer = maintainer;
+        Deb = deb;
     }
 
     /// <summary>
@@ -368,12 +371,40 @@ public sealed class LinuxConfig : PlatformConfig
     /// <summary><c>categories</c>: the <c>Categories</c> of the <c>.desktop</c> file, in order; empty when not set.</summary>
     public IReadOnlyList<string> Categories { get; }
 
+    /// <summary>
+    /// <c>maintainer</c>: the maintainer of deb, rpm and apk packages (one line, conventionally
+    /// <c>Name &lt;email&gt;</c>), or null for <c>[app] publisher</c>.
+    /// </summary>
+    public string? Maintainer { get; }
+
+    /// <summary><c>[linux.deb]</c>; empty when absent.</summary>
+    public LinuxDebConfig Deb { get; }
+
+    /// <summary>The package maintainer: <see cref="Maintainer"/>, or <paramref name="app"/>'s publisher.</summary>
+    public string MaintainerOf(AppConfig app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        return Maintainer ?? app.Publisher;
+    }
+
     /// <summary>The package name: <see cref="Package"/>, or the last segment of <paramref name="app"/>'s id, lower-cased.</summary>
     public string PackageName(AppConfig app)
     {
         ArgumentNullException.ThrowIfNull(app);
         return Package ?? LinuxPackageName.Derive(app.Id);
     }
+}
+
+/// <summary><c>[linux.deb]</c>: settings of the deb package only.</summary>
+public sealed class LinuxDebConfig
+{
+    internal LinuxDebConfig(IReadOnlyList<string> depends)
+    {
+        Depends = depends;
+    }
+
+    /// <summary><c>depends</c>: relations for the control file's <c>Depends</c>, written verbatim, in order.</summary>
+    public IReadOnlyList<string> Depends { get; }
 }
 
 /// <summary><c>[macos]</c>: macOS package settings.</summary>

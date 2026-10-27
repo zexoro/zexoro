@@ -12,6 +12,11 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         try
         {
             record = UpdateInstallRecord.Load(Path.Combine(environment.DefaultRoot, UpdateInstallRecord.FileName));
+            if (download && record.Strategy == Notify.Strategy)
+            {
+                return Notify.ManualUpdate(record, "download");
+            }
+
             var installed = record.ToInstalledApp();
             var state = new UpdaterState(environment.StateBase, record.App);
             using var http = environment.CreateHttpClient();
@@ -32,6 +37,7 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
                         Version = selection.Release.Version.ToString(),
                         Notes = selection.Release.Notes,
                         Size = selection.Artifact?.Size,
+                        Url = selection.Artifact?.Url.AbsoluteUri,
                     };
             }
 
@@ -43,6 +49,7 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
                 Version = release.Version.ToString(),
                 Notes = release.Notes,
                 Size = artifact.Size,
+                Url = artifact.Url.AbsoluteUri,
             };
             if (!download)
             {

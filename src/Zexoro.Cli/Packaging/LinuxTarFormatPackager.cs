@@ -34,13 +34,13 @@ internal sealed class LinuxTarFormatPackager : IPackager
                     LinuxTarPackager.MinimumUpdater);
             }
         }
-        catch (TarPackException ex)
+        catch (LinuxPackException ex)
         {
             throw new PackException(ex.Message, ex);
         }
     }
 
-    private static UnixUpdaterBinary ResolveUpdater(UpdaterRuntime runtime, CliEnvironment environment)
+    internal static UnixUpdaterBinary ResolveUpdater(UpdaterRuntime runtime, CliEnvironment environment)
     {
         try
         {
@@ -49,7 +49,7 @@ internal sealed class LinuxTarFormatPackager : IPackager
         }
         catch (Exception ex) when (ex is UpdaterUnavailableException or IOException or UnauthorizedAccessException)
         {
-            throw new TarPackException(ex.Message, ex);
+            throw new LinuxPackException(ex.Message, ex);
         }
     }
 }

@@ -47,11 +47,12 @@ internal sealed class TestInstall : IDisposable
     {
         "zip" => ".zip",
         "tar-gz" => ".tar.gz",
+        "deb" => ".deb",
         _ => ".exe",
     };
 
     /// <summary>The updater's file name in the root: without <c>.exe</c> for a Linux tar.gz.</summary>
-    public string UpdaterName => Format == "tar-gz" ? "zexoro-updater" : "zexoro-updater.exe";
+    public string UpdaterName => Format is "tar-gz" or "deb" ? "zexoro-updater" : "zexoro-updater.exe";
 
     public string Root { get; }
 
@@ -75,7 +76,7 @@ internal sealed class TestInstall : IDisposable
 
     public StringWriter Stderr { get; } = new();
 
-    public string Strategy => Scope == "user" ? "replace" : "reinstall";
+    public string Strategy => Format == "deb" ? "notify" : Scope == "user" ? "replace" : "reinstall";
 
     public UpdaterState State => new(LocalAppData, App);
 

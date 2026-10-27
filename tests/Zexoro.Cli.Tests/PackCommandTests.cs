@@ -244,12 +244,12 @@ public sealed class PackCommandTests : IDisposable
     [Fact]
     public void Pack_LinuxTarget_ValidatesButIgnoresTheWindowsTable()
     {
-        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"deb\"]\n");
+        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"rpm\"]\n");
         WriteFile("build/linux/notes", ElfHeader());
 
         Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
 
-        Assert.Equal("zexoro: the linux format 'deb' is not implemented yet; this zexoro version packs tar.gz for linux" + Environment.NewLine, Stderr);
+        Assert.Equal("zexoro: the linux format 'rpm' is not implemented yet; this zexoro version packs tar.gz, deb for linux" + Environment.NewLine, Stderr);
     }
 
     [Fact]
@@ -469,6 +469,31 @@ public sealed class PackCommandTests : IDisposable
         Assert.Equal(new FileInfo(archive).Length, artifact.Size);
 
         Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", archive + ".release.json"));
+        Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/stable.json"));
+    }
+
+    [Fact]
+    public void Pack_LinuxDebWithUpdates_WritesThePackageAndAReleaseFragmentThatFeedAddAccepts()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-linux-x64", ElfHeader());
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        WriteProject("[linux]\nformats = [\"deb\"]\nmaintainer = \"Example <dev@example.com>\"\n" + UpdatesTable);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("for linux-x64: deb", Stdout, StringComparison.Ordinal);
+        var package = Assert.Single(Directory.GetFiles(Dist, "*.deb"));
+        Assert.Matches(@"_1\.2\.3_amd64\.deb$", package);
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(package + ".release.json"));
+        Assert.Equal(Zexoro.Formats.Linux.DebPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("linux", "x64", "deb", "machine"), artifact.Target);
+        Assert.Equal(new Uri("https://example.com/dl/stable/" + Path.GetFileName(package)), artifact.Url);
+
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", package + ".release.json"));
         Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/stable.json"));
     }
 

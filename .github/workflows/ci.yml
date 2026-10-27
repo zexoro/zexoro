@@ -382,7 +382,9 @@ jobs:
 
   # The portable tar.gz on both Linux architectures: extract with the system's tar, run, and the
   # shared update scenario of docs/design/0006-desktop-formats.md section 5, plus a directory that
-  # is not writable (exit 7), for each pack host's archives.
+  # is not writable (exit 7), for each pack host's archives. Then the deb packages: dpkg-deb
+  # checks, install with apt, the notify scenario, upgrade, remove and purge, on the runner and in
+  # a debian:stable container (with lintian).
   e2e-linux:
     name: e2e on ${{ matrix.os }} (packed on ${{ matrix.host }})
     needs: build
@@ -409,10 +411,29 @@ jobs:
       - name: Portable tar.gz
         run: tests/e2e/unix/run-tar-e2e.sh e2e
 
-  # A zip and a tar.gz of fixed files must have the same bytes whichever host packed them
+      - name: deb on the runner (dpkg, apt)
+        if: ${{ !cancelled() }}
+        run: tests/e2e/unix/run-deb-e2e.sh e2e
+
+      # A minimal Debian: apt resolves the package's Depends (OpenSSL for the updater). The runner's
+      # .NET is mounted for the framework-dependent fixture app.
+      - name: deb in debian:stable (apt, lintian)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          dotnet_root="${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet)")")}"
+          docker run --rm -v "$PWD:/w" -w /w -v "$dotnet_root:/opt/dotnet:ro" -e DOTNET_ROOT=/opt/dotnet debian:stable bash -c '
+            set -euo pipefail
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3 curl lintian > /dev/null
+            cat /etc/debian_version
+            lintian --version
+            tests/e2e/unix/run-deb-e2e.sh e2e'
+
+  # A zip, a tar.gz and a deb of fixed files must have the same bytes whichever host packed them
   # (docs/design/0006-desktop-formats.md section 5).
   reproducible:
-    name: zip and tar.gz are reproducible across hosts
+    name: zip, tar.gz and deb are reproducible across hosts
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -425,7 +446,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for ext in zip tar.gz; do
+          for ext in zip tar.gz deb; do
             sha256sum e2e/*/repro/*.$ext
             count=$(ls e2e/*/repro/*.$ext | wc -l)
             test "$count" -eq 3 || { echo "::error::expected 3 repro $ext archives, found $count"; exit 1; }
@@ -433,3 +454,5 @@ jobs:
             test "$distinct" -eq 1 || { echo "::error::the repro $ext differs between pack hosts"; exit 1; }
           done
           tar -tzvf "$(ls e2e/*/repro/*.tar.gz | head -1)" --numeric-owner --utc
+          dpkg-deb --info "$(ls e2e/*/repro/*.deb | head -1)"
+          dpkg-deb --contents "$(ls e2e/*/repro/*.deb | head -1)"
