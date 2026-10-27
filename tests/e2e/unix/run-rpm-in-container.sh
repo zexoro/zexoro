@@ -4,8 +4,9 @@
 #
 #   tests/e2e/unix/run-rpm-in-container.sh <image> <directory written by tests/e2e/pack.sh> [enforce]
 #
-# Installs what the test needs from the distribution (python3, gpg, findutils; rpmlint where the
-# distribution has it in its main repositories, Fedora). Needs docker and the repository as the
+# Installs what the test needs from the distribution (python3, gpg, findutils, libstdc++ for .NET;
+# rpmlint where the
+# distribution has it in its main repositories: Fedora). Needs docker and the repository as the
 # working directory.
 set -euo pipefail
 
@@ -34,9 +35,9 @@ docker run --rm -v "$PWD:/w" -w /w -v "$dotnet_root:/opt/dotnet:ro" -e DOTNET_RO
     return 1
   }
   if command -v dnf > /dev/null; then
-    install python3 gnupg2 findutils
+    install python3 gnupg2 findutils libstdc++
     if grep -q "^ID=fedora" /etc/os-release; then install rpmlint; fi
   else
-    install python3 gpg2 findutils
+    install python3 gpg2 findutils libstdc++6
   fi
   tests/e2e/unix/run-rpm-e2e.sh "$@"' _ "$packages" "$@"
