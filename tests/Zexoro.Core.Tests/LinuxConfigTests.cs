@@ -39,6 +39,52 @@ public sealed class LinuxConfigTests
         Assert.Empty(config.Linux.Rpm.Requires);
         Assert.Null(config.Linux.Rpm.License);
         Assert.Null(config.Linux.Rpm.Signing);
+        Assert.Empty(config.Linux.Apk.Depends);
+        Assert.Null(config.Linux.Apk.License);
+        Assert.Null(config.Linux.Apk.Signing);
+    }
+
+    [Fact]
+    public void Linux_ApkKeys_AreRead()
+    {
+        var config = Parse(Minimal + """
+            [linux.apk]
+            depends = ["icu-libs", " so:libz.so.1 ", "foo>=1.2_rc1-r0", "!bar", "baz~1.2", "qux=~1"]
+            license = "MIT"
+
+            [linux.apk.signing]
+            key = { env = "APK_KEY" }
+            key_name = "dev@example.com-6123abcd.rsa.pub"
+            """);
+
+        Assert.Equal(["icu-libs", "so:libz.so.1", "foo>=1.2_rc1-r0", "!bar", "baz~1.2", "qux=~1"], config.Linux.Apk.Depends);
+        Assert.Equal("MIT", config.Linux.Apk.License);
+        var signing = Assert.IsType<ApkSigningConfig>(config.Linux.Apk.Signing);
+        Assert.Equal("APK_KEY", signing.Key.EnvironmentVariable);
+        Assert.Equal("dev@example.com-6123abcd.rsa.pub", signing.KeyName);
+        var pem = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n";
+        Assert.Equal(pem, signing.ResolveKey(name => name == "APK_KEY" ? pem : null));
+    }
+
+    [Fact]
+    public void ApkSigning_KeyFile_IsReadRelativeToTheConfiguration()
+    {
+        var directory = Directory.CreateTempSubdirectory("zexoro-apk-key-");
+        try
+        {
+            File.WriteAllText(Path.Combine(directory.FullName, "packager.rsa"), "pem");
+            var config = ZexoroConfig.Parse(Minimal + "[linux.apk.signing]\nkey = \"packager.rsa\"\nkey_name = \"packager.rsa.pub\"\n", directory.FullName);
+            var signing = config.Linux.Apk.Signing!;
+
+            Assert.Equal("pem", signing.ResolveKey());
+            File.Delete(Path.Combine(directory.FullName, "packager.rsa"));
+            var error = Assert.Throws<ConfigurationException>(() => signing.ResolveKey());
+            Assert.StartsWith("linux.apk.signing.key: the value is neither a PEM private key", Assert.Single(error.Errors).Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -134,6 +180,14 @@ public sealed class LinuxConfigTests
     [InlineData("[linux.rpm]\nrequires = [\"a\\nb\"]", "linux.rpm.requires[0] must be one line of text, such as 'libicu >= 60'")]
     [InlineData("[linux.rpm]\nlicense = \" \"", "linux.rpm.license must be one line of text, such as 'MIT' or 'LicenseRef-Proprietary'")]
     [InlineData("[linux.rpm.signing]\npassword = \"x\"", "[linux.rpm.signing]: missing required key 'key'")]
+    [InlineData("[linux.apk]\ndepends = [\"a b\"]", "linux.apk.depends[0]: 'a b' is not one apk dependency: a name such as 'icu-libs' or 'so:libicuuc.so.74', optionally with an operator and a version such as 'icu-libs>=74', without spaces (list each dependency separately)")]
+    [InlineData("[linux.apk]\ndepends = [\"foo>=\"]", "linux.apk.depends[0]: 'foo>=' is not one apk dependency: a name such as 'icu-libs' or 'so:libicuuc.so.74', optionally with an operator and a version such as 'icu-libs>=74', without spaces (list each dependency separately)")]
+    [InlineData("[linux.apk]\ndepends = [\">=1\"]", "linux.apk.depends[0]: '>=1' is not one apk dependency: a name such as 'icu-libs' or 'so:libicuuc.so.74', optionally with an operator and a version such as 'icu-libs>=74', without spaces (list each dependency separately)")]
+    [InlineData("[linux.apk]\nlicense = \" \"", "linux.apk.license must be one line of text, such as 'MIT' or 'LicenseRef-Proprietary'")]
+    [InlineData("[linux.apk.signing]\nkey = \"k.rsa\"", "[linux.apk.signing]: missing required key 'key_name'")]
+    [InlineData("[linux.apk.signing]\nkey = \"k.rsa\"\nkey_name = \"keys/k.rsa.pub\"", "linux.apk.signing.key_name: 'keys/k.rsa.pub' must be a file name of printable ASCII characters without spaces or '/', such as 'dev@example.com-6123abcd.rsa.pub'")]
+    [InlineData("[linux.apk.signing]\nkey = \"k.rsa\"\nkey_name = \"..\"", "linux.apk.signing.key_name: '..' is not a file name; use the name of the public key file users install into /etc/apk/keys, such as 'dev@example.com-6123abcd.rsa.pub'")]
+    [InlineData("[linux.apk.signing]\nkey = \"k.rsa\"\npassword = \"x\"\nkey_name = \"k.rsa.pub\"", "unknown key 'linux.apk.signing.password'")]
     public void Linux_InvalidKeys_AreErrors(string line, string message) =>
         Assert.Equal(message, Assert.Single(Errors(Minimal + "[linux]\n" + line + "\n")).Message);
 

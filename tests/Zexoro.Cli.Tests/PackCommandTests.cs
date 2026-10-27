@@ -244,12 +244,12 @@ public sealed class PackCommandTests : IDisposable
     [Fact]
     public void Pack_LinuxTarget_ValidatesButIgnoresTheWindowsTable()
     {
-        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"apk\"]\n");
+        WriteProject("[windows]\nformats = [\"msi\"]\n\n[linux]\nformats = [\"appimage\"]\n");
         WriteFile("build/linux/notes", ElfHeader());
 
         Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
 
-        Assert.Equal("zexoro: the linux format 'apk' is not implemented yet; this zexoro version packs tar.gz, deb, rpm for linux" + Environment.NewLine, Stderr);
+        Assert.Equal("zexoro: the linux format 'appimage' is not implemented yet; this zexoro version packs tar.gz, deb, rpm, apk for linux" + Environment.NewLine, Stderr);
     }
 
     [Fact]
@@ -495,6 +495,48 @@ public sealed class PackCommandTests : IDisposable
 
         Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", package + ".release.json"));
         Assert.Equal(ExitCodes.Success, Run("feed", "verify", "--public-key", "keys/zexoro-update.pub", "feed/stable.json"));
+    }
+
+    [Fact]
+    public void Pack_LinuxApkSigned_WritesASignedPackageWithTheMuslUpdaterAndAReleaseFragment()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-linux-musl-x64", ElfHeader());
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        _variables["APK_KEY"] = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "zexoro-e2e.rsa"));
+        WriteProject(
+            "[linux]\nformats = [\"apk\"]\n\n[linux.apk]\nlicense = \"MIT\"\n\n[linux.apk.signing]\nkey = { env = \"APK_KEY\" }\nkey_name = \"zexoro-e2e.rsa.pub\"\n" + UpdatesTable);
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("Signing the apk with RSA 2048-bit (zexoro-e2e.rsa.pub)", Stdout, StringComparison.Ordinal);
+        var package = Assert.Single(Directory.GetFiles(Dist, "*.apk"));
+        Assert.EndsWith("-1.2.3-r0.x86_64.apk", package, StringComparison.Ordinal);
+        var first = File.ReadAllBytes(package);
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(package + ".release.json"));
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("linux", "x64", "apk", "machine"), artifact.Target);
+        Assert.Equal(Zexoro.Formats.Linux.ApkPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", package + ".release.json"));
+
+        // RSA PKCS #1 v1.5 signatures are deterministic and the package has no time in it.
+        Assert.Equal(ExitCodes.Success, Run("pack", "--input", "build/linux", "--main", "notes"));
+        Assert.Equal(first, File.ReadAllBytes(package));
+    }
+
+    [Fact]
+    public void Pack_LinuxApkWithAPublicKey_FailsBeforeWriting()
+    {
+        _variables["APK_KEY"] = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "zexoro-e2e.rsa.pub"));
+        WriteProject("[linux]\nformats = [\"apk\"]\n\n[linux.apk.signing]\nkey = { env = \"APK_KEY\" }\nkey_name = \"zexoro-e2e.rsa.pub\"\n");
+        WriteFile("build/linux/notes", ElfHeader());
+
+        Assert.Equal(ExitCodes.Failure, Run("pack", "--input", "build/linux", "--main", "notes"));
+
+        Assert.StartsWith("zexoro: linux.apk.signing.key: the apk signing key is a public key", Stderr, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(Dist) && Directory.GetFiles(Dist, "*.apk").Length > 0);
     }
 
     [Fact]

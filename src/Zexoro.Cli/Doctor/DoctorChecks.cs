@@ -82,6 +82,7 @@ internal static class DoctorChecks
         new WindowsLicenseCheck(),
         new WindowsSigningCheck(),
         new RpmSigningCheck(),
+        new ApkSigningCheck(),
         new NsisToolsetCheck(),
         new UpdaterCheck(),
         new UpdatesCheck(),
@@ -305,6 +306,41 @@ internal sealed class RpmSigningCheck : IDoctorCheck
             }
         }
         catch (Exception ex) when (ex is SigningException or Packaging.PackException)
+        {
+            report.Error(DoctorChecks.About(signing.Key, ex.Message));
+        }
+    }
+}
+
+/// <summary>With apk among the formats: the apk signing key loads, or a warning that packages will be unsigned.</summary>
+internal sealed class ApkSigningCheck : IDoctorCheck
+{
+    public void Run(DoctorContext context, DoctorReport report)
+    {
+        if (!context.Formats.Contains(PackageFormat.Apk))
+        {
+            return;
+        }
+
+        if (context.Config.Linux.Apk.Signing is not { } signing)
+        {
+            report.Warning("[linux.apk.signing] is not configured; apk packages will be unsigned (apk installs them only with --allow-untrusted)");
+            return;
+        }
+
+        try
+        {
+            using var key = ApkSigningKey.Load(signing.ResolveKey(context.Environment.GetVariable));
+            report.Ok($"apk signing key loads: {key.Description}; users install its public key as /etc/apk/keys/{signing.KeyName}");
+        }
+        catch (ConfigurationException ex)
+        {
+            foreach (var error in ex.Errors)
+            {
+                report.Error(error.ToString());
+            }
+        }
+        catch (SigningException ex)
         {
             report.Error(DoctorChecks.About(signing.Key, ex.Message));
         }

@@ -17,10 +17,15 @@ internal sealed class ConfigReader
     private static readonly string[] RootKeys = ["app", "input", "windows", "linux", "macos", "updates"];
     private static readonly string[] AppKeys = ["id", "name", "version", "publisher", "icon", "description", "url"];
     private static readonly string[] InputKeys = ["dir", "main", "target"];
-    private static readonly string[] LinuxKeys = ["formats", "package", "icon", "categories", "maintainer", "deb", "rpm"];
+    private static readonly string[] LinuxKeys = ["formats", "package", "icon", "categories", "maintainer", "deb", "rpm", "apk"];
     private static readonly string[] LinuxDebKeys = ["depends"];
     private static readonly string[] LinuxRpmKeys = ["requires", "license", "signing"];
     private static readonly string[] RpmSigningKeys = ["key", "password"];
+    private static readonly string[] LinuxApkKeys = ["depends", "license", "signing"];
+    private static readonly string[] ApkSigningKeys = ["key", "key_name"];
+
+    /// <summary>apk's version operators, longest first.</summary>
+    private static readonly string[] ApkOperators = ["><", "<=", ">=", "=~", "<", ">", "=", "~"];
     private static readonly string[] MacOSKeys = ["formats"];
     private static readonly string[] WindowsKeys = ["formats", "install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
@@ -105,7 +110,7 @@ internal sealed class ConfigReader
         var linux = tables.OptionalTable("linux", LinuxKeys) is { } linuxTable
             ? ReadLinux(linuxTable)
             : new LinuxConfig(
-                false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux), null, null, [], null, new LinuxDebConfig([]), new LinuxRpmConfig([], null, null));
+                false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux), null, null, [], null, new LinuxDebConfig([]), new LinuxRpmConfig([], null, null), new LinuxApkConfig([], null, null));
         var macOS = tables.OptionalTable("macos", MacOSKeys) is { } macOSTable
             ? ReadMacOS(macOSTable)
             : new MacOSConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.MacOS));
@@ -381,8 +386,14 @@ internal sealed class ConfigReader
             rpm = ReadLinuxRpm(rpmTable);
         }
 
+        var apk = new LinuxApkConfig([], null, null);
+        if (table.OptionalTable("apk", LinuxApkKeys) is { } apkTable)
+        {
+            apk = ReadLinuxApk(apkTable);
+        }
+
         table.ReportUnknownKeys();
-        return new LinuxConfig(true, formats, package, icon, categories, maintainer, new LinuxDebConfig(depends), rpm);
+        return new LinuxConfig(true, formats, package, icon, categories, maintainer, new LinuxDebConfig(depends), rpm, apk);
     }
 
     /// <summary>An optional array of one-line strings, trimmed.</summary>
@@ -442,6 +453,100 @@ internal sealed class ConfigReader
 
         table.ReportUnknownKeys();
         return new LinuxRpmConfig(requires, license, signing);
+    }
+
+    private LinuxApkConfig ReadLinuxApk(TableReader table)
+    {
+        var depends = new List<string>();
+        if (table.OptionalArray("depends") is { } array)
+        {
+            for (var i = 0; i < array.Count; i++)
+            {
+                if (table.StringElement(array, i, "linux.apk.depends") is not { } line)
+                {
+                    continue;
+                }
+
+                var value = line.Value.Trim();
+                if (!IsApkDependency(value))
+                {
+                    Error(line, $"linux.apk.depends[{i}]: '{line.Value}' is not one apk dependency: a name such as 'icu-libs' or 'so:libicuuc.so.74', "
+                        + "optionally with an operator and a version such as 'icu-libs>=74', without spaces (list each dependency separately)");
+                }
+                else
+                {
+                    depends.Add(value);
+                }
+            }
+        }
+
+        string? license = null;
+        if (table.OptionalString("license") is { } licenseNode)
+        {
+            if (string.IsNullOrWhiteSpace(licenseNode.Value) || licenseNode.Value.Any(char.IsControl))
+            {
+                Error(licenseNode, "linux.apk.license must be one line of text, such as 'MIT' or 'LicenseRef-Proprietary'");
+            }
+            else
+            {
+                license = licenseNode.Value.Trim();
+            }
+        }
+
+        ApkSigningConfig? signing = null;
+        if (table.OptionalTable("signing", ApkSigningKeys) is { } signingTable)
+        {
+            var key = signingTable.RequiredValue("key");
+            var keyName = signingTable.RequiredString("key_name");
+            signingTable.ReportUnknownKeys();
+            if (keyName is not null && LinuxApkConfig.ValidateKeyName(keyName.Value) is { } problem)
+            {
+                Error(keyName, $"linux.apk.signing.key_name: '{keyName.Value}' {problem}");
+            }
+            else if (key is not null && keyName is not null)
+            {
+                signing = new ApkSigningConfig(_baseDirectory, key, keyName.Value);
+            }
+        }
+
+        table.ReportUnknownKeys();
+        return new LinuxApkConfig(depends, license, signing);
+    }
+
+    /// <summary>
+    /// One dependency as apk writes it to <c>.PKGINFO</c>: an optional <c>!</c> (conflict), a name
+    /// (any printable characters but spaces and operators, such as <c>so:libz.so.1</c>), and
+    /// optionally an operator (<c>=</c>, <c>&lt;</c>, <c>&gt;</c>, <c>&lt;=</c>, <c>&gt;=</c>,
+    /// <c>~</c>, <c>=~</c>, <c>&gt;&lt;</c>) followed by a version.
+    /// </summary>
+    internal static bool IsApkDependency(string value)
+    {
+        var text = value.StartsWith('!') ? value[1..] : value;
+        var end = 0;
+        while (end < text.Length && text[end] is > ' ' and < '\u007f' and not ('<' or '>' or '=' or '~' or '!'))
+        {
+            end++;
+        }
+
+        if (end == 0)
+        {
+            return false;
+        }
+
+        if (end == text.Length)
+        {
+            return true;
+        }
+
+        var rest = text[end..];
+        var op = ApkOperators.FirstOrDefault(o => rest.StartsWith(o, StringComparison.Ordinal));
+        if (op is null || rest.Length == op.Length)
+        {
+            return false;
+        }
+
+        var version = rest[op.Length..];
+        return char.IsAsciiDigit(version[0]) && version.All(c => c is > ' ' and < '\u007f' and not ('<' or '>' or '=' or '~' or '!'));
     }
 
     /// <summary>A category of the Desktop Menu Specification: registered names and <c>X-</c> extensions are made of these characters.</summary>
