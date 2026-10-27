@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using System.Formats.Asn1;
 using System.Security.Cryptography;
 
 namespace Zexoro.Updates;
@@ -11,9 +10,6 @@ namespace Zexoro.Updates;
 /// </summary>
 public sealed class UpdatePublicKey : IEquatable<UpdatePublicKey>
 {
-    internal const string EcPublicKeyOid = "1.2.840.10045.2.1";
-    internal const string P256Oid = "1.2.840.10045.3.1.7";
-
     private readonly byte[] _subjectPublicKeyInfo;
 
     private UpdatePublicKey(byte[] subjectPublicKeyInfo, string text)
@@ -41,41 +37,8 @@ public sealed class UpdatePublicKey : IEquatable<UpdatePublicKey>
     internal static bool TryParse(string? text, [NotNullWhen(true)] out UpdatePublicKey? key, [NotNullWhen(false)] out string? error)
     {
         key = null;
-        byte[] bytes;
-        try
+        if (!UpdateRules.TryDecodePublicKey(text, out var bytes, out error))
         {
-            bytes = Convert.FromBase64String(text?.Trim() ?? string.Empty);
-        }
-        catch (FormatException)
-        {
-            error = "expected base64 text";
-            return false;
-        }
-
-        if (bytes.Length == 0)
-        {
-            error = "the key is empty";
-            return false;
-        }
-
-        if (!IsP256SubjectPublicKeyInfo(bytes, out error))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var ecdsa = ECDsa.Create();
-            ecdsa.ImportSubjectPublicKeyInfo(bytes, out var read);
-            if (read != bytes.Length)
-            {
-                error = "unexpected data after the key";
-                return false;
-            }
-        }
-        catch (CryptographicException ex)
-        {
-            error = ex.Message;
             return false;
         }
 
@@ -102,40 +65,8 @@ public sealed class UpdatePublicKey : IEquatable<UpdatePublicKey>
     }
 
     /// <summary>Checks that <paramref name="spki"/> is a SubjectPublicKeyInfo for id-ecPublicKey on the P-256 curve.</summary>
-    internal static bool IsP256SubjectPublicKeyInfo(byte[] spki, [NotNullWhen(false)] out string? error)
-    {
-        try
-        {
-            var reader = new AsnReader(spki, AsnEncodingRules.DER);
-            var info = reader.ReadSequence();
-            reader.ThrowIfNotEmpty();
-            var algorithm = info.ReadSequence();
-            var algorithmOid = algorithm.ReadObjectIdentifier();
-            if (algorithmOid != EcPublicKeyOid)
-            {
-                error = "not an elliptic curve key";
-                return false;
-            }
-
-            if (algorithm.PeekTag() != Asn1Tag.ObjectIdentifier || algorithm.ReadObjectIdentifier() != P256Oid)
-            {
-                error = "not a P-256 key";
-                return false;
-            }
-
-            algorithm.ThrowIfNotEmpty();
-            info.ReadBitString(out _);
-            info.ThrowIfNotEmpty();
-        }
-        catch (AsnContentException)
-        {
-            error = "not a DER SubjectPublicKeyInfo";
-            return false;
-        }
-
-        error = null;
-        return true;
-    }
+    internal static bool IsP256SubjectPublicKeyInfo(byte[] spki, [NotNullWhen(false)] out string? error) =>
+        UpdateRules.IsP256SubjectPublicKeyInfo(spki, out error);
 
     public bool Equals(UpdatePublicKey? other) => other is not null && string.Equals(Text, other.Text, StringComparison.Ordinal);
 

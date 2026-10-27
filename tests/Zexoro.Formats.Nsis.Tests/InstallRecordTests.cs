@@ -42,4 +42,32 @@ public sealed class InstallRecordTests
         Assert.Equal("2.0.0-beta.1+build.7", document.RootElement.GetProperty("version").GetString());
         Assert.Equal("arm64", document.RootElement.GetProperty("arch").GetString());
     }
+
+    [Fact]
+    public void Create_WithUpdates_RecordsChannelFeedKeysAndMain()
+    {
+        var json = Encoding.UTF8.GetString(InstallRecord.Create(NsisScriptTests.UserUpdates with { MainExecutable = "bin/Notes.exe" }));
+        Assert.Equal(
+            """
+            {
+              "schema": 1,
+              "app": "com.example.notes",
+              "version": "1.2.3",
+              "os": "windows",
+              "arch": "x64",
+              "format": "nsis",
+              "scope": "user",
+              "strategy": "replace",
+              "channel": "beta",
+              "feed": "https://example.com/updates/beta/feed.json",
+              "keys": [
+                "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEa",
+                "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEb"
+              ],
+              "main": "bin/Notes.exe"
+            }
+
+            """.ReplaceLineEndings("\n"),
+            json);
+    }
 }

@@ -41,6 +41,12 @@ public sealed record NsisPackRequest
     /// <summary>Receives progress messages; null for none.</summary>
     public TextWriter? Log { get; init; }
 
+    /// <summary>
+    /// Returns the zexoro-updater for the installer's architecture; needed when the configuration has
+    /// <c>[updates]</c>. It throws <see cref="NsisException"/> when none is available.
+    /// </summary>
+    public Func<Architecture, UpdaterBinary>? ResolveUpdater { get; init; }
+
     /// <summary>Keeps the staging directory (script, staged files) for inspection instead of deleting it.</summary>
     public bool KeepStaging { get; init; }
 }
@@ -116,6 +122,16 @@ public static class NsisPackager
             throw new NsisException($"windows.license: {licensePath.FullPath} not found.");
         }
 
+        UpdaterBinary? updater = null;
+        NsisUpdates? updates = null;
+        if (config.Updates is { } updatesConfig)
+        {
+            // Both before anything is staged, so a missing updater or key file fails fast.
+            updater = request.ResolveUpdater?.Invoke(architecture)
+                ?? throw new NsisException($"[updates] is configured, but no zexoro-updater for {UpdaterBinary.RidFor(architecture)} is available.");
+            updates = new NsisUpdates(updatesConfig.Channel, updatesConfig.FeedUrl, updatesConfig.ResolveKeys());
+        }
+
         var outputDirectory = Path.GetFullPath(request.OutputDirectory);
         var staging = Directory.CreateTempSubdirectory("zexoro-nsis-").FullName;
         var keep = request.KeepStaging;
@@ -128,6 +144,12 @@ public static class NsisPackager
                 : [];
 
             File.Copy(config.App.Icon.FullPath, Path.Combine(staging, NsisInstallerSpec.IconFileName));
+            if (updater is not null)
+            {
+                request.Log?.WriteLine($"Adding {UpdaterBinary.FileName} ({updater.Source})");
+                updater.WriteTo(Path.Combine(staging, NsisInstallerSpec.UpdaterFileName));
+            }
+
             string? license = null;
             if (windows.License is { } l)
             {
@@ -151,6 +173,7 @@ public static class NsisPackager
                 EstimatedSizeKb = (size + 1023) / 1024,
                 EmptyDirectories = emptyDirectories,
                 SignCommand = request.Signing is { } s ? WriteSignCommand(staging, s, config.App) : null,
+                Updates = updates,
             };
 
             var record = InstallRecord.Create(spec);

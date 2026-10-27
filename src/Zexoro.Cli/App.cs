@@ -13,9 +13,13 @@ internal static class App
           init [--force]             Create a commented zexoro.toml in the current directory.
                                      --force overwrites an existing file.
           pack [--config <path>] [--version <v>] [--output <dir>]
+               [--channel <channel>] [--notes <url>]
                                      Build the configured installers into --output (default:
                                      dist/ next to the configuration file). --version
-                                     overrides app.version.
+                                     overrides app.version. With [updates], also write
+                                     <installer>.release.json for 'feed add'; --channel
+                                     overrides updates.channel, --notes sets the release
+                                     notes URL.
           doctor [--config <path>]   Check the configuration, the files it names, the
                                      signing certificate and the bundled tools.
           keys new [--output <dir>] [--name <name>]

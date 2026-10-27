@@ -12,8 +12,11 @@ internal interface IProcessHost
     /// <summary>Waits for process <paramref name="processId"/> to exit; true when it has exited or never existed.</summary>
     bool WaitForExit(int processId, TimeSpan timeout);
 
-    /// <summary>Runs a program with the updater's standard handles and waits for it; returns its exit code.</summary>
-    int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory);
+    /// <summary>
+    /// Runs a program with the updater's standard handles and waits for it; returns its exit code.
+    /// <paramref name="environment"/> adds variables to the inherited environment.
+    /// </summary>
+    int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string>? environment = null);
 
     /// <summary>
     /// Starts a program through <c>ShellExecute</c>, so a <c>requireAdministrator</c> manifest raises UAC,
@@ -95,9 +98,15 @@ internal sealed class SystemProcessHost : IProcessHost
         }
     }
 
-    public int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory)
+    public int RunAndWait(string path, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlyDictionary<string, string>? environment = null)
     {
-        using var process = Process.Start(StartInfo(path, arguments, workingDirectory))
+        var info = StartInfo(path, arguments, workingDirectory);
+        foreach (var (name, value) in environment ?? new Dictionary<string, string>())
+        {
+            info.Environment[name] = value;
+        }
+
+        using var process = Process.Start(info)
             ?? throw new InvalidOperationException($"cannot start {path}");
         process.WaitForExit();
         return process.ExitCode;

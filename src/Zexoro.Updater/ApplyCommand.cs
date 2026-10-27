@@ -221,7 +221,12 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         }
 
         log.WriteLine($"Staging {record.App} {staged.Version} in {root}");
-        var exitCode = environment.Processes.RunAndWait(installer, ["/S", "/ZEXORO_STAGE"], environment.TempDirectory);
+        // The installer refuses to stage unless this root is the existing install's location.
+        var exitCode = environment.Processes.RunAndWait(
+            installer,
+            ["/S", NsisScript.StageOption],
+            environment.TempDirectory,
+            new Dictionary<string, string>(StringComparer.Ordinal) { [NsisScript.StageRootVariable] = root });
         if (exitCode != 0)
         {
             return Discard(root, $"the installer exited with code {exitCode} in stage mode; nothing was changed", installed);

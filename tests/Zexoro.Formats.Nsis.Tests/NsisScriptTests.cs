@@ -51,6 +51,81 @@ public sealed class NsisScriptTests
         Shortcuts = WindowsShortcuts.Desktop,
     };
 
+    internal static NsisUpdates TestUpdates => new(
+        "beta",
+        new Uri("https://example.com/updates/beta/feed.json"),
+        ["MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEa", "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEb"]);
+
+    internal static NsisInstallerSpec UserUpdates => UserDefault with
+    {
+        Updates = TestUpdates,
+        EmptyDirectories = ["logs"],
+    };
+
+    internal static NsisInstallerSpec MachineUpdates => MachineX86 with { Updates = TestUpdates };
+
+    [Fact]
+    public void Generate_UserScopeWithUpdates_MatchesSnapshot() =>
+        Snapshot.Match("user-updates.nsi", NsisScript.Generate(UserUpdates));
+
+    [Fact]
+    public void Generate_MachineScopeWithUpdates_MatchesSnapshot() =>
+        Snapshot.Match("machine-updates.nsi", NsisScript.Generate(MachineUpdates));
+
+    [Fact]
+    public void Generate_WithUpdates_ShipsTheUpdaterAndStagesNextToTheInstall()
+    {
+        var script = NsisScript.Generate(UserUpdates);
+        Assert.Contains("${GetOptions} $0 \"/ZEXORO_STAGE\" $1", script, StringComparison.Ordinal);
+        Assert.Contains("ReadEnvStr $1 ZEXORO_UPDATE_ROOT", script, StringComparison.Ordinal);
+        Assert.Contains("SetOutPath \"$INSTDIR\\app$zxNew\"", script, StringComparison.Ordinal);
+        Assert.Contains("CreateDirectory \"$INSTDIR\\app$zxNew\\logs\"", script, StringComparison.Ordinal);
+        Assert.Contains("File \"/oname=zexoro-updater.exe$zxNew\" \"zexoro-updater.exe\"", script, StringComparison.Ordinal);
+        Assert.Contains("File \"/oname=zexoro-install.json$zxNew\" \"zexoro-install.json\"", script, StringComparison.Ordinal);
+        Assert.Contains("WriteUninstaller \"$INSTDIR\\uninstall.exe$zxNew\"", script, StringComparison.Ordinal);
+
+        // Stage mode returns before the shortcuts and the registry are written.
+        var stageReturn = script.IndexOf("    Return\n", StringComparison.Ordinal);
+        Assert.True(stageReturn > 0);
+        Assert.True(stageReturn < script.IndexOf("CreateShortcut", StringComparison.Ordinal));
+        Assert.True(stageReturn < script.IndexOf("WriteRegStr", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Generate_MachineScopeWithUpdates_RefusesStageMode()
+    {
+        var script = NsisScript.Generate(MachineUpdates);
+        Assert.Contains("stage mode is for per-user installs", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("ZEXORO_UPDATE_ROOT", script, StringComparison.Ordinal);
+        Assert.Contains("File \"/oname=zexoro-updater.exe$zxNew\" \"zexoro-updater.exe\"", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_WithoutUpdates_HasNoUpdaterOrStageMode()
+    {
+        var script = NsisScript.Generate(UserDefault);
+        Assert.DoesNotContain("ZEXORO_STAGE", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("File \"/oname=zexoro-updater.exe", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("$zxNew", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Generate_Uninstaller_RemovesUpdateLeftoversAndUpdaterState()
+    {
+        foreach (var spec in new[] { UserDefault, MachineUpdates })
+        {
+            var script = NsisScript.Generate(spec);
+            var uninstall = script[script.IndexOf("Section \"Uninstall\"", StringComparison.Ordinal)..];
+            foreach (var file in new[] { "zexoro-install.json", "zexoro-updater.exe", "uninstall.exe" })
+            {
+                Assert.Contains($"Delete \"$INSTDIR\\{file}.new\"", uninstall, StringComparison.Ordinal);
+                Assert.Contains($"Delete \"$INSTDIR\\{file}.old\"", uninstall, StringComparison.Ordinal);
+            }
+
+            Assert.Contains("RMDir /r \"$LOCALAPPDATA\\zexoro\\updater\\com.example.notes\"", uninstall, StringComparison.Ordinal);
+        }
+    }
+
     [Fact]
     public void Generate_UserScopeDefaults_MatchesSnapshot() =>
         Snapshot.Match("user-default.nsi", NsisScript.Generate(UserDefault));

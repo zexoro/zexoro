@@ -13,12 +13,13 @@ internal sealed class ConfigReader
     /// <summary>Folders that <c>[windows.uninstall] remove</c> entries must start with.</summary>
     internal static readonly string[] UninstallRoots = ["%LOCALAPPDATA%", "%APPDATA%", "%PROGRAMDATA%"];
 
-    private static readonly string[] RootKeys = ["app", "input", "windows"];
+    private static readonly string[] RootKeys = ["app", "input", "windows", "updates"];
     private static readonly string[] AppKeys = ["id", "name", "version", "publisher", "icon", "description", "url"];
     private static readonly string[] InputKeys = ["dir", "main"];
     private static readonly string[] WindowsKeys = ["install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
     private static readonly string[] UninstallKeys = ["remove"];
+    private static readonly string[] UpdatesKeys = ["feed", "download", "channel", "keys"];
 
     private readonly List<ConfigError> _errors = [];
     private readonly string _source;
@@ -85,11 +86,21 @@ internal sealed class ConfigReader
 
         var input = tables.RequiredTable("input", InputKeys) is { } inputTable ? ReadInput(inputTable) : null;
         var windows = tables.OptionalTable("windows", WindowsKeys) is { } windowsTable ? ReadWindows(windowsTable) : null;
+        UpdatesConfig? updates = null;
+        if (tables.OptionalTable("updates", UpdatesKeys) is { } updatesTable)
+        {
+            updates = ReadUpdates(updatesTable, overrides);
+        }
+        else if (overrides?.Channel is not null)
+        {
+            _errors.Add(new ConfigError("there is no [updates] table, so there is no channel to set", "--channel", null));
+        }
+
         tables.ReportUnknownKeys();
 
         return app is null || input is null || _errors.Count > 0
             ? null
-            : new ZexoroConfig(_source, _baseDirectory, app, input, windows);
+            : new ZexoroConfig(_source, _baseDirectory, app, input, windows, updates);
     }
 
     private AppConfig? ReadApp(TableReader table, ConfigOverrides? overrides)
@@ -273,6 +284,143 @@ internal sealed class ConfigReader
         return new WindowsConfig(scope, shortcuts, license, sign, signing, new WindowsUninstallConfig(remove));
     }
 
+    private UpdatesConfig? ReadUpdates(TableReader table, ConfigOverrides? overrides)
+    {
+        var feed = table.RequiredString("feed");
+        if (feed is not null)
+        {
+            if (!feed.Value.Contains(UpdatesConfig.ChannelPlaceholder, StringComparison.Ordinal))
+            {
+                Error(feed, $"updates.feed: '{feed.Value}' must contain {UpdatesConfig.ChannelPlaceholder}, so every channel has its own feed");
+                feed = null;
+            }
+            else if (ValidateUrlTemplate(feed.Value, [UpdatesConfig.ChannelPlaceholder]) is { } problem)
+            {
+                Error(feed, $"updates.feed: {problem}");
+                feed = null;
+            }
+        }
+
+        var download = table.RequiredString("download");
+        if (download is not null
+            && ValidateUrlTemplate(download.Value, [UpdatesConfig.FilePlaceholder, UpdatesConfig.VersionPlaceholder, UpdatesConfig.ChannelPlaceholder]) is { } downloadProblem)
+        {
+            Error(download, $"updates.download: {downloadProblem}");
+            download = null;
+        }
+
+        string? channel = UpdateRules.DefaultChannel;
+        const string ChannelRule = "is not a valid channel (ASCII letters, digits, '.', '-' and '_', not starting with '.')";
+        if (table.OptionalString("channel") is { } channelNode)
+        {
+            channel = channelNode.Value;
+            if (!UpdateRules.IsValidChannel(channelNode.Value))
+            {
+                Error(channelNode, $"updates.channel: '{channelNode.Value}' {ChannelRule}");
+                channel = null;
+            }
+        }
+
+        if (overrides?.Channel is { } overrideChannel)
+        {
+            channel = overrideChannel;
+            if (!UpdateRules.IsValidChannel(overrideChannel))
+            {
+                _errors.Add(new ConfigError($"'{overrideChannel}' {ChannelRule}", "--channel", null));
+                channel = null;
+            }
+        }
+
+        var keys = new List<UpdateKeyConfig>();
+        var keysValid = true;
+        if (!table.Contains("keys"))
+        {
+            table.Missing("keys");
+            keysValid = false;
+        }
+        else if (table.OptionalArray("keys") is { } keyArray)
+        {
+            if (keyArray.Count == 0)
+            {
+                Error(keyArray, "updates.keys must list at least one public key (see 'zexoro keys new')");
+                keysValid = false;
+            }
+
+            for (var i = 0; i < keyArray.Count; i++)
+            {
+                var name = $"updates.keys[{i}]";
+                switch (keyArray[i])
+                {
+                    case TomlString literal:
+                        if (UpdateRules.TryDecodePublicKey(literal.Value, out var bytes, out var keyError))
+                        {
+                            keys.Add(new UpdateKeyConfig(name, Convert.ToBase64String(bytes), null, literal.Position));
+                        }
+                        else
+                        {
+                            Error(literal, $"{name}: not a valid update public key (base64 of a P-256 SubjectPublicKeyInfo, as 'zexoro keys new' writes): {keyError}");
+                            keysValid = false;
+                        }
+
+                        break;
+                    case TomlTable reference:
+                        var fileTable = new TableReader(this, reference, name, ["file"]);
+                        var path = fileTable.RequiredPath("file");
+                        fileTable.ReportUnknownKeys();
+                        if (path is null)
+                        {
+                            keysValid = false;
+                        }
+                        else
+                        {
+                            keys.Add(new UpdateKeyConfig(name, null, path, reference.Position));
+                        }
+
+                        break;
+                    default:
+                        Error(keyArray[i], $"{name} must be a base64 public key or {{ file = \"<key>.pub\" }}, but is {Describe(keyArray[i])}");
+                        keysValid = false;
+                        break;
+                }
+            }
+        }
+        else
+        {
+            keysValid = false;
+        }
+
+        table.ReportUnknownKeys();
+        return feed is null || download is null || channel is null || !keysValid
+            ? null
+            : new UpdatesConfig(_source, feed.Value, download.Value, channel, keys);
+    }
+
+    /// <summary>
+    /// Checks a URL template: only <paramref name="placeholders"/> may appear, and with sample values
+    /// it must be an https URL (http only for localhost, 127.0.0.1 and [::1]).
+    /// </summary>
+    private static string? ValidateUrlTemplate(string template, string[] placeholders)
+    {
+        var rest = template;
+        foreach (var placeholder in placeholders)
+        {
+            rest = rest.Replace(placeholder, string.Empty, StringComparison.Ordinal);
+        }
+
+        if (rest.Contains('{', StringComparison.Ordinal) || rest.Contains('}', StringComparison.Ordinal))
+        {
+            return $"'{template}' contains an unknown placeholder; it may use {Quote(placeholders)}";
+        }
+
+        var sample = template
+            .Replace(UpdatesConfig.ChannelPlaceholder, "stable", StringComparison.Ordinal)
+            .Replace(UpdatesConfig.FilePlaceholder, "App-1.0.0-win-x64.exe", StringComparison.Ordinal)
+            .Replace(UpdatesConfig.VersionPlaceholder, "1.0.0", StringComparison.Ordinal);
+        return Uri.TryCreate(sample, UriKind.Absolute, out var url) && UpdateRules.IsAllowedUrl(url) && string.IsNullOrEmpty(url.UserInfo)
+            ? null
+            : $"'{template}' is not an https URL (plain http is accepted only for localhost, 127.0.0.1 and [::1])";
+    }
+
     private static string? ValidateFileName(string name)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -365,6 +513,10 @@ internal sealed class ConfigReader
 
             return AsTable(key, node, childKeys);
         }
+
+        public bool Contains(string key) => table.ContainsKey(key);
+
+        public void Missing(string key) => MissingKey(key);
 
         public TableReader? OptionalTable(string key, string[] childKeys) =>
             table.TryGetValue(key, out var node) ? AsTable(key, node, childKeys) : null;

@@ -13,6 +13,7 @@ public sealed record NsisInstallerSpec
     public const string InstallRecordFileName = "zexoro-install.json";
     public const string UninstallerFileName = "uninstall.exe";
     public const string OutputFileName = "package.exe";
+    public const string UpdaterFileName = UpdaterBinary.FileName;
 
     public required string AppId { get; init; }
 
@@ -54,6 +55,12 @@ public sealed record NsisInstallerSpec
     /// </summary>
     public string? SignCommand { get; init; }
 
+    /// <summary>
+    /// <c>[updates]</c>: the installer then ships <c>zexoro-updater.exe</c> (staged next to the script),
+    /// supports stage mode and records the update settings; null for an installer without updates.
+    /// </summary>
+    public NsisUpdates? Updates { get; init; }
+
     /// <summary>The install strategy recorded for the update contract: replace (per-user) or reinstall (per-machine).</summary>
     public string Strategy => Scope == WindowsInstallScope.User ? "replace" : "reinstall";
 
@@ -61,3 +68,9 @@ public sealed record NsisInstallerSpec
 
     public bool Is64Bit => Architecture == Architecture.X64 || Architecture == Architecture.Arm64;
 }
+
+/// <summary>The update settings an installer records (docs/design/0005-nsis-updates.md section 3).</summary>
+/// <param name="Channel">The channel.</param>
+/// <param name="Feed">The expanded feed URL.</param>
+/// <param name="Keys">The trusted public keys, as base64 text.</param>
+public sealed record NsisUpdates(string Channel, Uri Feed, IReadOnlyList<string> Keys);
