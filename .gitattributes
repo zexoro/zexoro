@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.ico binary
+
+# Vendored conformance cases must stay byte-exact (CRLF, invalid UTF-8, BOMs).
+tests/Zexoro.Toml.Tests/toml-test/** -text

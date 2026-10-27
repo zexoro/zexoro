@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    zexoro-updater: the updater shipped inside every install (docs/design/0005-nsis-updates.md
+    section 3). Published with Native AOT for win-x86, win-x64 and win-arm64; it builds and its
+    tests run on every host, with the Windows-only pieces behind small interfaces.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>zexoro-updater</AssemblyName>
+    <RootNamespace>Zexoro.Updater</RootNamespace>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- asInvoker: the updater never elevates, and its name must not trigger installer detection. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <OptimizationPreference>Size</OptimizationPreference>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Zexoro.Core\Zexoro.Core.csproj" />
+    <ProjectReference Include="..\Zexoro.Updates\Zexoro.Updates.csproj" />
+    <ProjectReference Include="..\Zexoro.Formats.Nsis\Zexoro.Formats.Nsis.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zexoro.Updater.Tests" />
+  </ItemGroup>
+</Project>

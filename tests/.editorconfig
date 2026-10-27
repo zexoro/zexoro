@@ -1,0 +1,3 @@
+[*.cs]
+# Test names use Subject_ExpectedBehavior.
+dotnet_diagnostic.CA1707.severity = none

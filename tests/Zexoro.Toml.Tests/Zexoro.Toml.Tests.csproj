@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zexoro.Toml\Zexoro.Toml.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- toml-test 2.2.0 conformance cases (MIT, see toml-test/LICENSE). -->
+    <None Include="toml-test\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
