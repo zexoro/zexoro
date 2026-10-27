@@ -274,7 +274,7 @@ function Test-Scope([string]$ScopeName, $Server) {
         $downloaded = Test-UpdaterRun $app 'download' $ExitAvailable 'downloaded' 'the 2.0.0 installer matches the feed'
         Test-Equal (Get-Field $downloaded.Json 'version') '2.0.0' 'download reports version 2.0.0'
         [void](Test-That (@($server.Requests) -contains $url.AbsolutePath) "the updater fetched $($url.AbsolutePath)" (@($server.Requests) -join ', '))
-        Test-Equal ((Get-Downloads $app) -join ', ') "$(Split-Path -Leaf $app.Installer['2.0.0']), staged.json" 'the verified installer is staged in the downloads'
+        Test-Equal ((Get-Downloads $app) -join ', ') ((@((Split-Path -Leaf $app.Installer['2.0.0']), 'staged.json') | Sort-Object) -join ', ') 'the verified installer is staged in the downloads'
 
         Write-Host '-- apply while the application runs, then restart it'
         if (Test-Path -LiteralPath $DataDir) { Remove-Item -LiteralPath $DataDir -Recurse -Force }
