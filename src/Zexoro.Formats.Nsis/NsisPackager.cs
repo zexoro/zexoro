@@ -138,16 +138,24 @@ public static class NsisPackager
         try
         {
             var appDirectory = Path.Combine(staging, NsisInstallerSpec.AppDirectoryName);
-            var (size, emptyDirectories) = CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
+            var emptyDirectories = CopyDirectory(input.Directory.FullPath, appDirectory, outputDirectory);
             var signed = request.Signing is { } signing
                 ? SignApplicationFiles(appDirectory, input.Main.Value, windows.Sign, signing, config.App, request.Log)
                 : [];
+
+            // Measured after signing, as installed: zexoro-updater computes the same value from app.new.
+            var size = new DirectoryInfo(appDirectory).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
 
             File.Copy(config.App.Icon.FullPath, Path.Combine(staging, NsisInstallerSpec.IconFileName));
             if (updater is not null)
             {
                 request.Log?.WriteLine($"Adding {UpdaterBinary.FileName} ({updater.Source})");
-                updater.WriteTo(Path.Combine(staging, NsisInstallerSpec.UpdaterFileName));
+                var updaterPath = Path.Combine(staging, NsisInstallerSpec.UpdaterFileName);
+                updater.WriteTo(updaterPath);
+                if (request.Signing is { } updaterSigning)
+                {
+                    SignUpdater(updaterPath, updaterSigning, config.App, request.Log);
+                }
             }
 
             string? license = null;
@@ -240,12 +248,11 @@ public static class NsisPackager
 
     /// <summary>
     /// Copies the input directory, including hidden files, skipping <paramref name="exclude"/> (the
-    /// output directory, when it lies inside the input). Returns the total size and the empty directories.
+    /// output directory, when it lies inside the input). Returns the empty directories.
     /// </summary>
-    private static (long Size, IReadOnlyList<string> EmptyDirectories) CopyDirectory(string source, string destination, string exclude)
+    private static List<string> CopyDirectory(string source, string destination, string exclude)
     {
         var options = new EnumerationOptions { RecurseSubdirectories = false, AttributesToSkip = 0, IgnoreInaccessible = false };
-        long size = 0;
         var empty = new List<string>();
         var excludePrefix = exclude.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
 
@@ -256,7 +263,6 @@ public static class NsisPackager
             foreach (var file in Directory.EnumerateFiles(from, "*", options).Order(StringComparer.Ordinal))
             {
                 File.Copy(file, Path.Combine(to, Path.GetFileName(file)));
-                size += new FileInfo(file).Length;
                 any = true;
             }
 
@@ -279,7 +285,7 @@ public static class NsisPackager
         }
 
         Copy(source, destination, string.Empty);
-        return (size, empty);
+        return empty;
     }
 
     private static List<string> SignApplicationFiles(
@@ -314,6 +320,29 @@ public static class NsisPackager
         }
 
         return signed;
+    }
+
+    /// <summary>
+    /// Signs the staged updater (after <see cref="UpdaterBinary.WriteTo"/> checked its hash) with the
+    /// application's certificate, so it carries the same publisher as the files it updates. An
+    /// updater that is already signed keeps its signature, like application files.
+    /// </summary>
+    private static void SignUpdater(string path, NsisSigning signing, AppConfig app, TextWriter? log)
+    {
+        if (AuthenticodeSigner.IsSigned(path))
+        {
+            log?.WriteLine($"Skipping {UpdaterBinary.FileName}: already signed");
+            return;
+        }
+
+        log?.WriteLine($"Signing {UpdaterBinary.FileName}");
+        AuthenticodeSigner.SignFile(path, new SigningOptions
+        {
+            Credential = signing.Credential,
+            TimestampUrl = signing.Timestamp,
+            Description = app.Name,
+            DescriptionUrl = app.Url,
+        });
     }
 
     /// <summary>

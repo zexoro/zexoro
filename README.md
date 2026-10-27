@@ -2,7 +2,7 @@
 
 Package applications built with any technology into native installers, and keep them up to date.
 
-> **Status:** early (0.x). zexoro builds signed Windows installers (NSIS) from an already-built application directory, on Linux, macOS or Windows. Automatic updates and other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
+> **Status:** early (0.x). zexoro builds signed, automatically updatable Windows installers (NSIS) from an already-built application directory, on Linux, macOS or Windows. Other formats are not available yet, and the configuration may still change between 0.x releases. See the [product definition](docs/product.md) for where it is going.
 
 ## Install
 
@@ -92,7 +92,7 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 
 ### `[updates]` (optional)
 
-Makes installers updatable: they then include `zexoro-updater.exe`, record where to look for updates, and `pack` writes a release fragment `<installer>.release.json` next to each installer for `zexoro feed add` (see [Update keys and feeds](#update-keys-and-feeds-preview)). Without the table, installers have no updater.
+Makes installers updatable: they then include `zexoro-updater.exe`, record where to look for updates, and `pack` writes a release fragment `<installer>.release.json` next to each installer for `zexoro feed add` (see [Automatic updates](#automatic-updates)). Without the table, installers have no updater.
 
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
@@ -136,17 +136,30 @@ The password reaches zexoro only through the environment; it is never written to
 - **Stage mode (internal):** with `[updates]`, the updater runs a per-user installer as `/S /ZEXORO_STAGE`; it then writes the new version next to the install (`app.new\` and `.new` files) without touching the registry or shortcuts, and the updater swaps it in.
 - **Exit codes:** `0` success, `1` cancelled, `2` aborted (unsupported Windows, a per-machine install without administrator rights, or a refused stage mode), `3` a newer version is already installed, `4` the application is running or its files are in use.
 
-## Update keys and feeds (preview)
+## Automatic updates
 
-Automatic updates are being built (see [design 0005](docs/design/0005-nsis-updates.md)). Installers packed with [`[updates]`](#updates-optional) include the updater and come with release fragments; the signing side works:
+Installers packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured) and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
-zexoro keys new                     # zexoro-update.key.pem (private) and zexoro-update.pub
-zexoro feed add --feed feed.json --key zexoro-update.key.pem <fragment.release.json>...
+zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
+zexoro pack                         # installer + <installer>.release.json
+zexoro feed add --feed feed.json --key zexoro-update.key.pem dist/*.release.json
 zexoro feed verify --public-key zexoro-update.pub feed.json
 ```
 
-`feed add` merges release fragments into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one. Keep the private key out of the repository and back it up: if every trusted private key is lost, installed copies can no longer be updated automatically.
+Upload the installers to the `download` URL first, then `feed.json` and `feed.json.sig` to the `feed` URL. `feed add` merges release fragments (packed on any number of hosts) into `feed.json`, increases its `sequence` and writes the detached signature `feed.json.sig`. The private key can also come from `ZEXORO_UPDATE_KEY` (the PEM text, for CI secrets); `ZEXORO_UPDATE_KEY_PASSWORD` encrypts a new key and decrypts an existing one.
+
+> **Keep the private key out of the repository and back it up.** Installed copies trust only the keys listed in `[updates] keys`; if every trusted private key is lost, they can no longer be updated automatically and users must reinstall by hand.
+
+Your application drives the installed updater, `<install root>\zexoro-updater.exe`:
+
+```
+zexoro-updater check    [--json]                       # 0 update available, 1 up to date
+zexoro-updater download [--json]                       # downloads and verifies the update
+zexoro-updater apply --wait-pid <pid> [--restart] [--json]
+```
+
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in; per-machine installs run the new installer, which asks for elevation. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed, `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json`.
 
 ## zexoro exit codes
 

@@ -10,8 +10,14 @@
 #   unsigned/ZexoroE2EUser-1.0.0-win-x64.exe            per-user, no [windows.signing], no [updates]
 #   root.cer                                            the throwaway root that issued the signing certificate (DER), to trust while testing
 #   zexoro-update.pub                                   the update public key the installers trust
+#   zexoro-update.key.pem                               its (throwaway) private key, to publish more feeds while testing
+#   feeds/{user,machine}/seq1/feed.json{,.sig}          signed feed with 1.0.0 only (sequence 1)
+#   feeds/{user,machine}/seq2/feed.json{,.sig}          signed feed with 1.0.0 and 2.0.0 (sequence 2)
+#   feeds/{user,machine}/other-key/feed.json{,.sig}     like seq2, but signed with a key the installers do not trust
 #
 # Version 1.0.0 of the fixture contains obsolete.txt, which 2.0.0 drops. Both contain version.txt.
+# The installers' [updates] point at http://localhost:8080/<scope>/stable/, where
+# tests/e2e/windows/Run-UpdateE2E.ps1 serves the feeds and installers.
 set -euo pipefail
 
 if [ $# -ne 2 ]; then
@@ -127,8 +133,31 @@ if ls "$out"/unsigned/*.release.json >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "== Merging the fragments into signed feeds (one per application)"
+echo "== Publishing signed feeds (one per application)"
+"$cli" keys new --output "$work/keys" --name other
+cp "$work/keys/zexoro-update.key.pem" "$out/zexoro-update.key.pem"
 for scope in user machine; do
-  "$cli" feed add --feed "$work/feed/$scope/stable/feed.json" --key "$work/keys/zexoro-update.key.pem" "$out/$scope"/*.release.json
-  "$cli" feed verify --public-key "$work/keys/zexoro-update.pub" "$work/feed/$scope/stable/feed.json"
+  title="$(printf '%s' "${scope:0:1}" | tr '[:lower:]' '[:upper:]')${scope:1}"
+  v1="$out/$scope/ZexoroE2E$title-1.0.0-win-x64.exe.release.json"
+  v2="$out/$scope/ZexoroE2E$title-2.0.0-win-x64.exe.release.json"
+  feed="$work/feed/$scope/feed.json"
+  # The same feed file twice: 1.0.0 alone, then 2.0.0 added, which raises the sequence.
+  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "$v1"
+  mkdir -p "$out/feeds/$scope/seq1"
+  cp "$feed" "$feed.sig" "$out/feeds/$scope/seq1/"
+  "$cli" feed add --feed "$feed" --key "$work/keys/zexoro-update.key.pem" "$v2"
+  mkdir -p "$out/feeds/$scope/seq2"
+  cp "$feed" "$feed.sig" "$out/feeds/$scope/seq2/"
+  "$cli" feed add --feed "$work/other/$scope/feed.json" --key "$work/keys/other.key.pem" "$v1" "$v2"
+  mkdir -p "$out/feeds/$scope/other-key"
+  cp "$work/other/$scope/feed.json" "$work/other/$scope/feed.json.sig" "$out/feeds/$scope/other-key/"
+  for variant in seq1 seq2; do
+    "$cli" feed verify --public-key "$work/keys/zexoro-update.pub" "$out/feeds/$scope/$variant/feed.json"
+  done
+  grep -q '"sequence": 1,' "$out/feeds/$scope/seq1/feed.json"
+  grep -q '"sequence": 2,' "$out/feeds/$scope/seq2/feed.json"
+  if "$cli" feed verify --public-key "$work/keys/zexoro-update.pub" "$out/feeds/$scope/other-key/feed.json" >/dev/null 2>&1; then
+    echo "a feed signed with another key verified" >&2
+    exit 1
+  fi
 done
