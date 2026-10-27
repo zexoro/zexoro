@@ -9,6 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Zexoro.Updater\Zexoro.Updater.csproj" />
+    <ProjectReference Include="..\..\src\Zexoro.Formats.Linux\Zexoro.Formats.Linux.csproj" />
     <ProjectReference Include="..\..\src\Zexoro.Formats.Zip\Zexoro.Formats.Zip.csproj" />
   </ItemGroup>
 </Project>

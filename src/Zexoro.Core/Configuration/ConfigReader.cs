@@ -17,7 +17,7 @@ internal sealed class ConfigReader
     private static readonly string[] RootKeys = ["app", "input", "windows", "linux", "macos", "updates"];
     private static readonly string[] AppKeys = ["id", "name", "version", "publisher", "icon", "description", "url"];
     private static readonly string[] InputKeys = ["dir", "main", "target"];
-    private static readonly string[] LinuxKeys = ["formats"];
+    private static readonly string[] LinuxKeys = ["formats", "package", "icon", "categories"];
     private static readonly string[] MacOSKeys = ["formats"];
     private static readonly string[] WindowsKeys = ["formats", "install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
@@ -101,7 +101,7 @@ internal sealed class ConfigReader
                 new WindowsUninstallConfig([]));
         var linux = tables.OptionalTable("linux", LinuxKeys) is { } linuxTable
             ? ReadLinux(linuxTable)
-            : new LinuxConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux));
+            : new LinuxConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.Linux), null, null, []);
         var macOS = tables.OptionalTable("macos", MacOSKeys) is { } macOSTable
             ? ReadMacOS(macOSTable)
             : new MacOSConfig(false, PackageFormat.DefaultFor(OperatingSystemFamily.MacOS));
@@ -312,9 +312,52 @@ internal sealed class ConfigReader
     private LinuxConfig ReadLinux(TableReader table)
     {
         var formats = ReadFormats(table, OperatingSystemFamily.Linux);
+        string? package = null;
+        if (table.OptionalString("package") is { } packageNode)
+        {
+            if (LinuxPackageName.Validate(packageNode.Value) is { } problem)
+            {
+                Error(packageNode, $"linux.package: '{packageNode.Value}' {problem}");
+            }
+            else
+            {
+                package = packageNode.Value;
+            }
+        }
+
+        var icon = table.OptionalPath("icon");
+        var categories = new List<string>();
+        if (table.OptionalArray("categories") is { } categoryArray)
+        {
+            for (var i = 0; i < categoryArray.Count; i++)
+            {
+                if (table.StringElement(categoryArray, i, "linux.categories") is not { } category)
+                {
+                    continue;
+                }
+
+                if (!IsDesktopCategory(category.Value))
+                {
+                    Error(category, $"linux.categories[{i}]: '{category.Value}' is not a desktop entry category (ASCII letters, digits and '-', such as 'Office' or 'Development')");
+                }
+                else if (categories.Contains(category.Value, StringComparer.Ordinal))
+                {
+                    Error(category, $"linux.categories: '{category.Value}' is listed twice");
+                }
+                else
+                {
+                    categories.Add(category.Value);
+                }
+            }
+        }
+
         table.ReportUnknownKeys();
-        return new LinuxConfig(true, formats);
+        return new LinuxConfig(true, formats, package, icon, categories);
     }
+
+    /// <summary>A category of the Desktop Menu Specification: registered names and <c>X-</c> extensions are made of these characters.</summary>
+    private static bool IsDesktopCategory(string value) =>
+        value.Length > 0 && value.All(c => char.IsAsciiLetterOrDigit(c) || c == '-');
 
     private MacOSConfig ReadMacOS(TableReader table)
     {

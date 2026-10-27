@@ -7,7 +7,7 @@ namespace Zexoro.Updater.Tests;
 /// <summary>
 /// <c>apply</c> for a portable tar.gz install (docs/design/0006-desktop-formats.md, "replace — Windows
 /// zip, tar.gz"): Unix modes and symbolic links survive, unsafe links are refused. The archives are
-/// written with <see cref="TarWriter"/>; the tar.gz packager comes with step 5.
+/// written with <see cref="TarWriter"/>, and once with the packager's own writer.
 /// </summary>
 public sealed class TarGzApplyTests : IDisposable
 {
@@ -56,7 +56,7 @@ public sealed class TarGzApplyTests : IDisposable
         return buffer.ToArray();
     }
 
-    /// <summary>A Linux portable archive as step 5's packager will write it, with links in <c>app/</c>.</summary>
+    /// <summary>A Linux portable archive as the packager writes it, with links in <c>app/</c>.</summary>
     internal static byte[] Archive(TestInstall install, string version, params Entry[] extra) => Write(
         [
             new("Notes/", Mode: Executable),
@@ -105,6 +105,56 @@ public sealed class TarGzApplyTests : IDisposable
         Assert.DoesNotContain(Directory.EnumerateFileSystemEntries(Root), e => e.EndsWith(".old", StringComparison.Ordinal) || e.EndsWith(".new", StringComparison.Ordinal));
         Assert.Equal(Path.Combine(Root, "app", "Notes"), Assert.Single(_install.Processes.Started).Path);
         Assert.False(Directory.Exists(_install.State.Downloads));
+    }
+
+    [Fact]
+    public void Apply_ArchiveFromTheLinuxPackager_KeepsModesAndLinks()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Unix modes and symbolic links");
+            return;
+        }
+
+        var input = Directory.CreateTempSubdirectory("zexoro-tar-input-").FullName;
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(input, "lib"));
+            var deep = Path.Combine(input, string.Join('/', Enumerable.Repeat("a-rather-long-directory-name", 5)));
+            Directory.CreateDirectory(deep);
+            File.WriteAllText(Path.Combine(deep, "deep.txt"), "deep");
+            File.WriteAllText(Path.Combine(input, "Notes"), "app 2.0.0");
+            File.WriteAllText(Path.Combine(input, "lib", "libnotes.so.1"), "\u007FELF library");
+            File.WriteAllText(Path.Combine(input, "lib", "data.txt"), "data");
+            File.CreateSymbolicLink(Path.Combine(input, "lib", "libnotes.so"), "libnotes.so.1");
+            var archive = Path.Combine(input, "..", Path.GetFileName(input) + ".tar.gz");
+            Zexoro.Formats.Linux.ReproducibleTar.Write(
+                [
+                    Zexoro.Formats.Linux.TarItem.Directory("Notes"),
+                    Zexoro.Formats.Linux.TarItem.Directory("Notes/app"),
+                    .. Zexoro.Formats.Linux.LinuxPayload.Read(input, "Notes/app", "Notes", null),
+                    Zexoro.Formats.Linux.TarItem.FromBytes("Notes/zexoro-install.json", _install.Record("2.0.0", "Notes"), Data),
+                    Zexoro.Formats.Linux.TarItem.FromBytes("Notes/zexoro-updater", Encoding.UTF8.GetBytes("updater 2.0.0"), Executable),
+                    Zexoro.Formats.Linux.TarItem.FromBytes("Notes/icon.png", [0x89], Data),
+                ],
+                archive);
+            _install.Stage("2.0.0", File.ReadAllBytes(archive));
+            File.Delete(archive);
+
+            Assert.Equal(UpdaterExitCodes.Success, _install.Run("apply"));
+
+            Assert.Equal(Executable, File.GetUnixFileMode(Path.Combine(Root, "app", "Notes")));
+            Assert.Equal(Executable, File.GetUnixFileMode(Path.Combine(Root, "app", "lib", "libnotes.so.1")));
+            Assert.Equal(Data, File.GetUnixFileMode(Path.Combine(Root, "app", "lib", "data.txt")));
+            Assert.Equal("libnotes.so.1", new FileInfo(Path.Combine(Root, "app", "lib", "libnotes.so")).LinkTarget);
+            Assert.Equal("deep", File.ReadAllText(Path.Combine(Root, "app", Path.GetRelativePath(input, deep), "deep.txt")));
+            Assert.True(File.Exists(Path.Combine(Root, "icon.png")));
+            Assert.Equal(Executable, File.GetUnixFileMode(Path.Combine(Root, "zexoro-updater")));
+        }
+        finally
+        {
+            Directory.Delete(input, recursive: true);
+        }
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.Security.Cryptography.X509Certificates;
 using Zexoro.Cli.Packaging;
 using Zexoro.Cli.Toolsets;
 using Zexoro.Configuration;
+using Zexoro.Formats.Linux;
 using Zexoro.Formats.Nsis;
 using Zexoro.Platforms;
 using Zexoro.Signing;
@@ -189,7 +190,7 @@ internal sealed class InputCheck : IDoctorCheck
     }
 }
 
-/// <summary>The application icon exists and, for Windows, is an ICO file.</summary>
+/// <summary>The application icon exists and, for Windows, is an ICO file; for Linux, a PNG icon can be made.</summary>
 internal sealed class IconCheck : IDoctorCheck
 {
     public void Run(DoctorContext context, DoctorReport report)
@@ -209,6 +210,25 @@ internal sealed class IconCheck : IDoctorCheck
         }
 
         report.Ok($"app.icon: {icon.FullPath}");
+        if (context.Targets(OperatingSystemFamily.Linux))
+        {
+            CheckLinuxIcon(config, report);
+        }
+    }
+
+    /// <summary>Linux formats need a PNG: <c>[linux] icon</c>, or one converted from <c>[app] icon</c>.</summary>
+    private static void CheckLinuxIcon(ZexoroConfig config, DoctorReport report)
+    {
+        try
+        {
+            var png = LinuxTarPackager.LoadIcon(config);
+            var source = config.Linux.Icon is { } linuxIcon ? $"linux.icon: {linuxIcon.FullPath}" : "linux icon: converted from app.icon";
+            report.Ok($"{source} ({png.Width}x{png.Height} PNG)");
+        }
+        catch (TarPackException ex)
+        {
+            report.Error(ex.Message);
+        }
     }
 
     /// <summary>An ICO file starts with reserved 0, type 1 (icon) and a non-zero image count, all little-endian.</summary>
