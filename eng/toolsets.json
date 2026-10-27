@@ -1,26 +1,26 @@
 {
   "nsis": {
-    "version": "3.13-zexoro.2",
+    "version": "3.13-zexoro.3",
     "archives": {
       "linux-x64": {
-        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.2/nsis-3.13-linux-x64.tar.gz",
-        "sha256": "cadc703c334ca7a6cc36f205a7d97848bd23b875fc873f81d3239f90d0f13787"
+        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.3/nsis-3.13-linux-x64.tar.gz",
+        "sha256": "6eaf27c6834fff8029db8ef98f67200a3b8af946cf3968af7af092e5814ff34a"
       },
       "linux-arm64": {
-        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.2/nsis-3.13-linux-arm64.tar.gz",
-        "sha256": "a596418cafd77a4905b1b96e91735842a2b0c5e046877fd9220b75ebc5233e58"
+        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.3/nsis-3.13-linux-arm64.tar.gz",
+        "sha256": "73eb1e8b5a64b7ff63e7d6073ed6327bdf351749f2e21414cda5cce609f64787"
       },
       "osx-x64": {
-        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.2/nsis-3.13-osx.tar.gz",
-        "sha256": "94584174f0c0acda3dfcf6580ff2e02b60532fa6895b2f205a3cd23224bc13a5"
+        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.3/nsis-3.13-osx.tar.gz",
+        "sha256": "26b09c54617943a6fc38e8af8ea66439627097f7879614c774ac2683a54524d8"
       },
       "osx-arm64": {
-        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.2/nsis-3.13-osx.tar.gz",
-        "sha256": "94584174f0c0acda3dfcf6580ff2e02b60532fa6895b2f205a3cd23224bc13a5"
+        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.3/nsis-3.13-osx.tar.gz",
+        "sha256": "26b09c54617943a6fc38e8af8ea66439627097f7879614c774ac2683a54524d8"
       },
       "win-x64": {
-        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.2/nsis-3.13-win-x64.tar.gz",
-        "sha256": "49687f8cfd8089dbbb8fd96497ddb6841ae1eafc3b64e439c4f5b03f7b0b5399"
+        "url": "https://github.com/zexoro/nsis-toolset/releases/download/v3.13-zexoro.3/nsis-3.13-win-x64.tar.gz",
+        "sha256": "862e6fda025ced0ebcfb2d5e3484679cb5ccbae21ba464134640480550e1135a"
       }
     }
   }
