@@ -122,8 +122,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The bundled makensis (zexoro/nsis-toolset) needs glibc 2.38, so building zexoro on an
-          # older Ubuntu would not widen the supported Linux distributions.
           - rid: linux-x64
             os: ubuntu-24.04
           - rid: linux-arm64
@@ -197,10 +195,13 @@ jobs:
           done
           tools=$(ls -d "$ZEXORO_CACHE_DIR"/toolsets/nsis-*)
           if [ "$RUNNER_OS" = Linux ]; then
-            for binary in "$cli" "$tools/Bin/makensis"; do
-              glibc=$(objdump -T "$binary" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
-              echo "$(basename "$binary") needs $glibc"
-            done
+            # The README states the glibc the CLI needs; the bundled makensis must stay static.
+            glibc=$(objdump -T "$cli" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+            echo "zexoro needs $glibc"
+            if ! file "$tools/Bin/makensis" | grep -Eq 'statically linked|static-pie linked'; then
+              echo "::error::the bundled makensis is not statically linked"
+              exit 1
+            fi
           fi
 
           # Pack and sign an installer, which runs the embedded makensis and calls this binary
