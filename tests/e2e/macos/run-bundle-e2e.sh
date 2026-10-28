@@ -67,8 +67,9 @@ for rid in osx-x64 osx-arm64; do
   mkdir -p "$work/publish-$rid/data"
   printf 'data\n' > "$work/publish-$rid/data/readme.txt"
 done
-# A RID-specific publish marks the assembly for that architecture; a universal app needs an AnyCPU one.
-dotnet publish "$here/../fixture-app" -c Release -r osx-arm64 --self-contained false -p:PlatformTarget=AnyCPU -o "$work/publish-universal" -nologo -v quiet
+# A RID-specific publish marks the assembly for that architecture; a universal app needs an AnyCPU
+# one, which a publish without a RID gives (the apphost comes from lipo below).
+dotnet publish "$here/../fixture-app" -c Release --self-contained false -p:UseAppHost=false -o "$work/publish-universal" -nologo -v quiet
 rm -f "$work/publish-universal"/*.pdb
 cp "$work/publish-osx-arm64/version.txt" "$work/publish-universal/"
 cp -R "$work/publish-osx-arm64/data" "$work/publish-universal/"
