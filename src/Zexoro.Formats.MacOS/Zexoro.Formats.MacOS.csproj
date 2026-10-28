@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- macOS formats (docs/design/0006-desktop-formats.md): the .app bundle (Info.plist, icns,
+       universal updater), codesign/notarytool/stapler through IMacToolRunner, and the zip. -->
+  <PropertyGroup>
+    <RootNamespace>Zexoro.Formats.MacOS</RootNamespace>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Zexoro.Core\Zexoro.Core.csproj" />
+    <ProjectReference Include="..\Zexoro.Formats.Nsis\Zexoro.Formats.Nsis.csproj" />
+    <ProjectReference Include="..\Zexoro.Formats.Linux\Zexoro.Formats.Linux.csproj" />
+    <ProjectReference Include="..\Zexoro.Formats.Zip\Zexoro.Formats.Zip.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zexoro.Formats.MacOS.Tests" />
+  </ItemGroup>
+</Project>

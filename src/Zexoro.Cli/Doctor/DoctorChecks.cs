@@ -83,6 +83,7 @@ internal static class DoctorChecks
         new WindowsSigningCheck(),
         new RpmSigningCheck(),
         new ApkSigningCheck(),
+        new MacOSCheck(),
         new NsisToolsetCheck(),
         new UpdaterCheck(),
         new UpdatesCheck(),
@@ -467,6 +468,171 @@ internal sealed class WindowsSigningCheck : IDoctorCheck
         else
         {
             report.Ok($"timestamp authority {url} (not contacted)");
+        }
+    }
+}
+
+/// <summary>
+/// macOS: the host can pack (docs/design/0006-desktop-formats.md section 3: codesign, and
+/// notarytool and stapler from the Xcode command line tools for notarization), the icon converts,
+/// and the signing and notarization settings are usable.
+/// </summary>
+internal sealed class MacOSCheck : IDoctorCheck
+{
+    public void Run(DoctorContext context, DoctorReport report)
+    {
+        if (!context.Targets(OperatingSystemFamily.MacOS))
+        {
+            return;
+        }
+
+        var config = context.Config;
+        var environment = context.Environment;
+        var macOS = config.MacOS;
+        try
+        {
+            var icns = Formats.MacOS.MacZipPackager.LoadIcon(config);
+            report.Ok($"{(macOS.Icon is { } icon ? $"macos.icon: {icon.FullPath}" : "macos icon: converted from app.icon")} ({icns.Length} bytes of icns)");
+        }
+        catch (Formats.MacOS.MacPackException ex)
+        {
+            report.Error(ex.Message);
+        }
+
+        if (macOS.Signing is null)
+        {
+            if (config.Updates is not null)
+            {
+                report.Error("[updates] needs [macos.signing] for macOS bundles: an ad-hoc signature cannot be updated");
+            }
+            else
+            {
+                report.Warning("[macos.signing] is not configured: bundles are signed ad hoc and run only where the user overrides Gatekeeper");
+            }
+        }
+        else if (macOS.Signing.Entitlements is { } entitlements && !File.Exists(entitlements.FullPath))
+        {
+            report.Error(DoctorChecks.About(entitlements, config, "not found"));
+        }
+
+        if (macOS.Notarization is { } notarization)
+        {
+            try
+            {
+                var key = Packaging.MacZipFormatPackager.ResolveNotarization(notarization, environment)!;
+                if (File.Exists(key.KeyPath))
+                {
+                    report.Ok($"macos.notarization: API key {key.KeyId} ({key.KeyPath})");
+                }
+                else
+                {
+                    report.Error(DoctorChecks.About(notarization.Key, $"the API key file {key.KeyPath} does not exist"));
+                }
+            }
+            catch (ConfigurationException ex)
+            {
+                foreach (var error in ex.Errors)
+                {
+                    report.Error(error.ToString());
+                }
+            }
+        }
+
+        if (!environment.IsMacOSHost)
+        {
+            report.Error("macOS bundles pack only on macOS (codesign and notarytool are part of macOS and Xcode); run zexoro pack for macOS on a Mac");
+            return;
+        }
+
+        CheckTool(environment, report, Formats.MacOS.MacCodeSigner.Codesign, ["--help"], "codesign", required: true);
+        foreach (var tool in new[] { "notarytool", "stapler" })
+        {
+            var result = Run(environment, Formats.MacOS.MacCodeSigner.Xcrun, ["--find", tool]);
+            if (result is { ExitCode: 0 })
+            {
+                report.Ok($"{tool}: {result.Output.Trim()}");
+            }
+            else if (macOS.Notarization is not null)
+            {
+                report.Error($"{tool} not found; notarization needs the Xcode command line tools (xcode-select --install)");
+            }
+            else
+            {
+                report.Warning($"{tool} not found (Xcode command line tools); needed only for [macos.notarization]");
+            }
+        }
+
+        if (macOS.Signing is { } signing)
+        {
+            CheckIdentity(signing, environment, report);
+        }
+    }
+
+    private static void CheckIdentity(MacOSSigningConfig signing, CliEnvironment environment, DoctorReport report)
+    {
+        string identity;
+        string? keychain;
+        try
+        {
+            identity = signing.Identity.Resolve(environment.GetVariable);
+            keychain = signing.ResolveKeychain(environment.GetVariable);
+        }
+        catch (ConfigurationException ex)
+        {
+            foreach (var error in ex.Errors)
+            {
+                report.Error(error.ToString());
+            }
+
+            return;
+        }
+
+        List<string> arguments = ["find-identity", "-p", "codesigning"];
+        if (keychain is not null)
+        {
+            arguments.Add(keychain);
+        }
+
+        var result = Run(environment, "/usr/bin/security", arguments);
+        if (result is null || result.ExitCode != 0)
+        {
+            report.Warning($"macos.signing: cannot list code-signing identities with security find-identity{(result is null ? string.Empty : $": {result.Error.Trim()}")}");
+            return;
+        }
+
+        var found = result.Output.Split('\n').Any(line =>
+            line.Contains($"\"{identity}\"", StringComparison.Ordinal) || (identity.Length == 40 && line.Contains(identity, StringComparison.OrdinalIgnoreCase)));
+        if (found)
+        {
+            report.Ok($"macos.signing: identity '{identity}'{(keychain is null ? string.Empty : $" in {keychain}")}");
+        }
+        else
+        {
+            report.Error($"macos.signing: no code-signing identity '{identity}' in {(keychain ?? "the keychain search list")} (security find-identity -p codesigning)");
+        }
+    }
+
+    private static void CheckTool(CliEnvironment environment, DoctorReport report, string path, string[] arguments, string name, bool required)
+    {
+        if (Run(environment, path, arguments) is not null)
+        {
+            report.Ok($"{name}: {path}");
+        }
+        else if (required)
+        {
+            report.Error($"{name} ({path}) cannot be run; macOS bundles are signed with it");
+        }
+    }
+
+    private static Formats.MacOS.ToolResult? Run(CliEnvironment environment, string path, IReadOnlyList<string> arguments)
+    {
+        try
+        {
+            return environment.MacTools.Run(path, arguments);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return null;
         }
     }
 }
