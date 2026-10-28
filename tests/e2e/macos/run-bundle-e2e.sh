@@ -5,7 +5,8 @@
 #   tests/e2e/macos/run-bundle-e2e.sh <zexoro executable>
 #
 # - creates a temporary keychain with a self-signed code-signing certificate (openssl, security),
-#   never touching the login keychain or the keychain search list, and deletes it at the end;
+#   never touching the login keychain, and deletes it at the end (in CI it joins the keychain search
+#   list for the run, which codesign on macOS 15 needs; the list is restored);
 # - publishes the fixture app framework-dependent for osx-x64 and osx-arm64 and makes a universal
 #   build output with lipo;
 # - packs the runner's architecture and the universal build, signed with the certificate, hardened
@@ -33,8 +34,13 @@ work="$(cd "$work" && pwd -P)"
 keychain="$work/e2e.keychain-db"
 port=8082
 server=
+search_list=
 cleanup() {
   [ -n "$server" ] && kill "$server" 2>/dev/null || true
+  if [ -n "$search_list" ]; then
+    # shellcheck disable=SC2086 # the saved list is one quoted path per word
+    eval security list-keychains -d user -s $search_list || true
+  fi
   security delete-keychain "$keychain" 2>/dev/null || true
   rm -rf "$work"
 }
@@ -80,6 +86,15 @@ security set-keychain-settings -lut 7200 "$keychain"
 security unlock-keychain -p e2e "$keychain"
 security import "$work/cert.p12" -k "$keychain" -P e2e -T /usr/bin/codesign > /dev/null
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k e2e "$keychain" > /dev/null
+# codesign on macOS 15 finds the private key only in a keychain on the search list (--keychain
+# alone is enough on macOS 26 and later), so in CI the keychain joins the user's search list for
+# the run; the original list is restored at the end. Local runs leave the search list alone.
+if [ -n "${CI:-}" ]; then
+  search_list="$(security list-keychains -d user | tr -d ' ' | tr '\n' ' ')"
+  # shellcheck disable=SC2086
+  eval security list-keychains -d user -s "'$keychain'" $search_list
+  security list-keychains -d user
+fi
 security find-identity -p codesigning "$keychain"
 fingerprint="$(/usr/bin/openssl x509 -in "$work/cert.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g' | tr '[:upper:]' '[:lower:]')"
 

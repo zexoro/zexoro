@@ -132,7 +132,7 @@ Used when the target is Linux or macOS. Linux `tar.gz`, `deb`, `rpm` and `apk` a
 | `[macos]` | `minimum_version` | string | none | `LSMinimumSystemVersion`, for example `"12.0"`. |
 | `[macos]` | `category` | string | none | `LSApplicationCategoryType`, for example `"public.app-category.productivity"`. |
 | `[macos.signing]` | `identity` | string or `{ env = "NAME" }` | required | The code-signing identity `codesign --sign` takes: the certificate's name, such as `"Developer ID Application: Example Ltd. (TEAMID1234)"`, or its SHA-1 hash. Without the table bundles are signed ad hoc, with a notice. |
-| `[macos.signing]` | `keychain` | string or `{ env = "NAME" }` | the keychain search list | The keychain file holding the identity, for example a temporary CI keychain. |
+| `[macos.signing]` | `keychain` | string or `{ env = "NAME" }` | the keychain search list | The keychain file holding the identity, for example a temporary CI keychain. On macOS 15 and earlier, codesign finds the key only when that keychain is also on the search list (`security list-keychains -d user -s <keychain> <the current list>`). |
 | `[macos.signing]` | `entitlements` | path | none | An entitlements property list for the application (applied to the bundle, not to nested code). A framework-dependent .NET application under the hardened runtime needs `com.apple.security.cs.allow-jit` and `com.apple.security.cs.disable-library-validation`. |
 | `[macos.signing]` | `installer_identity` | string or `{ env = "NAME" }` | none | The installer-signing identity for `pkg` (not implemented yet). |
 | `[macos.notarization]` | `key` | string or `{ env = "NAME" }` | required | Path of the App Store Connect API key (`AuthKey_<id>.p8`). Needs `[macos.signing]`. |
