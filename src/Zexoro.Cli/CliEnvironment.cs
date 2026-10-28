@@ -14,6 +14,12 @@ internal sealed record CliEnvironment(string WorkingDirectory, Func<string, stri
     /// </summary>
     public IReadOnlyList<string> ZexoroCommand { get; init; } = DetectZexoroCommand();
 
+    /// <summary>Whether this zexoro runs on macOS, the only host that can pack macOS formats (codesign).</summary>
+    public bool IsMacOSHost { get; init; } = OperatingSystem.IsMacOS();
+
+    /// <summary>Runs macOS tools (codesign, xcrun); tests substitute a fake.</summary>
+    public Formats.MacOS.IMacToolRunner MacTools { get; init; } = Formats.MacOS.ProcessToolRunner.Instance;
+
     /// <summary>The clock, for timestamps such as a feed's <c>published</c>.</summary>
     public TimeProvider Time { get; init; } = TimeProvider.System;
 

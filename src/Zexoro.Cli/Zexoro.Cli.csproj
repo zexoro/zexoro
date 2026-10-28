@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Zexoro.Formats.Nsis\Zexoro.Formats.Nsis.csproj" />
     <ProjectReference Include="..\Zexoro.Formats.Linux\Zexoro.Formats.Linux.csproj" />
     <ProjectReference Include="..\Zexoro.Formats.Zip\Zexoro.Formats.Zip.csproj" />
+    <ProjectReference Include="..\Zexoro.Formats.MacOS\Zexoro.Formats.MacOS.csproj" />
     <ProjectReference Include="..\Zexoro.Updates\Zexoro.Updates.csproj" />
   </ItemGroup>
   <ItemGroup>

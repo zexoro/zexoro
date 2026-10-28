@@ -45,7 +45,7 @@ internal sealed class PackException(string message, Exception? innerException = 
 internal static class Packagers
 {
     /// <summary>Every implemented packager. Formats of <see cref="PackageFormat.All"/> without one are "not implemented yet".</summary>
-    public static IReadOnlyList<IPackager> All { get; } = [new NsisFormatPackager(), new WindowsZipFormatPackager(), new LinuxTarFormatPackager(), new LinuxDebFormatPackager(), new LinuxRpmFormatPackager(), new LinuxApkFormatPackager()];
+    public static IReadOnlyList<IPackager> All { get; } = [new NsisFormatPackager(), new WindowsZipFormatPackager(), new LinuxTarFormatPackager(), new LinuxDebFormatPackager(), new LinuxRpmFormatPackager(), new LinuxApkFormatPackager(), new MacZipFormatPackager()];
 
     /// <summary>The packager for <paramref name="format"/>, or null when the format is not implemented yet.</summary>
     public static IPackager? Find(PackageFormat format) => All.FirstOrDefault(p => p.Format == format);

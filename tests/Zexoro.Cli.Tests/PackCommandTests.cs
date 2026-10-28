@@ -56,10 +56,14 @@ public sealed class PackCommandTests : IDisposable
 
     private string Dist => Path.Combine(_dir.FullName, "dist");
 
-    private int Run(params string[] args) =>
+    private int Run(params string[] args) => Run(OperatingSystem.IsMacOS(), Zexoro.Formats.MacOS.ProcessToolRunner.Instance, args);
+
+    private int Run(bool macOSHost, Zexoro.Formats.MacOS.IMacToolRunner macTools, params string[] args) =>
         App.Run(args, _stdout, _stderr, new CliEnvironment(_dir.FullName, name => _variables.GetValueOrDefault(name))
         {
             ZexoroCommand = DotnetZexoroCommand(),
+            IsMacOSHost = macOSHost,
+            MacTools = macTools,
         });
 
     /// <summary>Runs this build's zexoro.dll with the dotnet host that runs the tests, for <c>sign-file</c>.</summary>
@@ -399,6 +403,83 @@ public sealed class PackCommandTests : IDisposable
     [InlineData("--request", "r.json", "a.exe", "b.exe")]
     public void SignFile_BadArguments_IsUsageError(params string[] args) =>
         Assert.Equal(ExitCodes.UsageError, Run(["sign-file", .. args]));
+
+    /// <summary>A thin 64-bit Mach-O header for <paramref name="cpuType"/>.</summary>
+    private static byte[] MachOHeader(uint cpuType)
+    {
+        var header = new byte[4096];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header, 0xFEEDFACF);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(4), cpuType);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(12), 2);
+        return header;
+    }
+
+    /// <summary>Records tool calls and succeeds, standing in for codesign.</summary>
+    private sealed class RecordingTools : Zexoro.Formats.MacOS.IMacToolRunner
+    {
+        public List<IReadOnlyList<string>> Calls { get; } = [];
+
+        public Zexoro.Formats.MacOS.ToolResult Run(string fileName, IReadOnlyList<string> arguments)
+        {
+            Calls.Add(arguments.ToList());
+            return new Zexoro.Formats.MacOS.ToolResult(0, string.Empty, string.Empty);
+        }
+    }
+
+    [Fact]
+    public void Pack_MacOSTarget_OnAnotherHost_FailsClearly()
+    {
+        WriteProject(string.Empty);
+        WriteFile("build/mac/Notes", MachOHeader(0x0100000C));
+        var tools = new RecordingTools();
+
+        Assert.Equal(ExitCodes.Failure, Run(false, tools, "pack", "--input", "build/mac", "--main", "Notes"));
+
+        Assert.Contains("macOS bundles pack only on macOS", Stderr, StringComparison.Ordinal);
+        Assert.Empty(tools.Calls);
+    }
+
+    [Fact]
+    public void Pack_MacOSZipWithUpdates_WritesTheZipAndAReleaseFragmentThatFeedAddAccepts()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Bundles keep Unix modes and symbolic links.");
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteFile("updaters/zexoro-updater-osx-arm64", MachOHeader(0x0100000C));
+        _variables[UpdaterBinary.DirectoryVariable] = Path.Combine(_dir.FullName, "updaters");
+        WriteProject("[macos]\n\n[macos.signing]\nidentity = { env = \"MAC_IDENTITY\" }\n" + UpdatesTable);
+        _variables["MAC_IDENTITY"] = "Developer ID Application: Example (T)";
+        WriteFile("build/mac/Notes", MachOHeader(0x0100000C));
+        var tools = new RecordingTools();
+
+        Assert.Equal(ExitCodes.Success, Run(true, tools, "pack", "--input", "build/mac", "--main", "Notes"));
+
+        Assert.Equal(string.Empty, Stderr);
+        Assert.Contains("for osx-arm64: zip", Stdout, StringComparison.Ordinal);
+        Assert.Contains(tools.Calls, c => c.Contains("Developer ID Application: Example (T)") && c[^1].EndsWith("Example Notes.app", StringComparison.Ordinal));
+        var zip = Path.Combine(Dist, "ExampleNotes-1.2.3-osx-arm64.zip");
+        var fragment = Zexoro.Updates.ReleaseFragment.Parse(File.ReadAllBytes(zip + ".release.json"));
+        Assert.Equal(Zexoro.Formats.MacOS.MacZipPackager.MinimumUpdater, fragment.Release.MinimumUpdater?.ToString());
+        var artifact = Assert.Single(fragment.Release.Artifacts);
+        Assert.Equal(new Zexoro.Updates.UpdateTarget("macos", "arm64", "app", "user"), artifact.Target);
+        Assert.Equal(new Uri("https://example.com/dl/stable/ExampleNotes-1.2.3-osx-arm64.zip"), artifact.Url);
+
+        Assert.Equal(ExitCodes.Success, Run("feed", "add", "--feed", "feed/stable.json", "--key", "keys/zexoro-update.key.pem", zip + ".release.json"));
+    }
+
+    [Fact]
+    public void Pack_MacOSZipWithUpdatesWithoutSigning_IsRefused()
+    {
+        Assert.Equal(ExitCodes.Success, Run("keys", "new", "--output", "keys"));
+        WriteProject("[macos]\n" + UpdatesTable);
+        WriteFile("build/mac/Notes", MachOHeader(0x0100000C));
+        var tools = new RecordingTools();
+
+        Assert.Equal(ExitCodes.Failure, Run(true, tools, "pack", "--input", "build/mac", "--main", "Notes"));
+
+        Assert.Contains("[updates] needs [macos.signing]", Stderr, StringComparison.Ordinal);
+        Assert.Empty(tools.Calls);
+        Assert.False(Directory.Exists(Dist));
+    }
 
     private const string UpdatesTable = """
 

@@ -11,7 +11,7 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         UpdateInstallRecord? record = null;
         try
         {
-            record = UpdateInstallRecord.Load(Path.Combine(environment.DefaultRoot, UpdateInstallRecord.FileName));
+            record = UpdateInstallRecord.Load(InstallLayout.RecordPath(environment.DefaultRoot));
             if (download && record.Strategy == Notify.Strategy)
             {
                 return Notify.ManualUpdate(record, "download");
@@ -96,10 +96,10 @@ internal sealed class UpdateCommands(UpdaterEnvironment environment, TextWriter 
         state.WriteStaged(new StagedUpdate(installed.App, installed.Channel, release.Version, release.Notes, file, artifact.Size, artifact.Sha256, artifact.Url));
     }
 
-    /// <summary>The downloaded file's extension: <c>.zip</c> or <c>.tar.gz</c> for a portable archive, <c>.exe</c> (an installer) otherwise.</summary>
+    /// <summary>The downloaded file's extension: <c>.zip</c> for a portable zip or a macOS bundle, <c>.tar.gz</c> for a tar.gz, <c>.exe</c> (an installer) otherwise.</summary>
     internal static string ExtensionFor(string format) => format switch
     {
-        ApplyCommand.ZipFormat => ".zip",
+        ApplyCommand.ZipFormat or ApplyCommand.AppFormat => ".zip",
         ApplyCommand.TarGzFormat => ".tar.gz",
         _ => ".exe",
     };

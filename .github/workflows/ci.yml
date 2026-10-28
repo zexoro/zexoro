@@ -466,6 +466,48 @@ jobs:
         if: ${{ !cancelled() }}
         run: tests/e2e/unix/run-apk-in-container.sh alpine:latest e2e "$RUNNER_TEMP/dotnet-musl"
 
+  # The macOS zip (docs/design/0006-desktop-formats.md section 5) on both macOS architectures:
+  # codesign needs the runner's own keychain, so each runner publishes its own CLI and packs there,
+  # signed with a self-signed certificate in a temporary keychain; then ditto -x -k, codesign
+  # --verify --deep --strict, Info.plist, the record, the updater's architectures, launching the
+  # app, the bundled updater, ad-hoc signing and [updates] refused without [macos.signing].
+  e2e-macos:
+    name: e2e on ${{ matrix.os }} (macOS zip)
+    needs: updater
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            rid: osx-arm64
+          - os: macos-15-intel
+            rid: osx-x64
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/zexoro-toolsets
+          key: zexoro-toolsets-${{ hashFiles('eng/toolsets.json') }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: updater-binaries
+          path: artifacts/updater
+
+      - name: Publish CLI (Native AOT)
+        run: >
+          dotnet publish src/Zexoro.Cli -c Release -r ${{ matrix.rid }} -o artifacts/publish/${{ matrix.rid }}
+          -p:ZexoroUpdaterDir=artifacts/updater -p:ZexoroUpdaterRequired=true
+
+      - name: macOS zip
+        run: tests/e2e/macos/run-bundle-e2e.sh artifacts/publish/${{ matrix.rid }}/zexoro
+
   # A zip, a tar.gz, a deb, a signed rpm and a signed apk of fixed files must have the same bytes
   # whichever host packed them (docs/design/0006-desktop-formats.md section 5).
   reproducible:

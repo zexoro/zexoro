@@ -38,6 +38,12 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
     /// </summary>
     public const string TarGzFormat = "tar-gz";
 
+    /// <summary>The record and feed format of a macOS bundle (zip or dmg); its update payload is always a zip.</summary>
+    public const string AppFormat = "app";
+
+    /// <summary>The strategy of macOS bundles. Applying it comes with stage 5 step 10; until then apply exits 7.</summary>
+    public const string BundleStrategy = "bundle";
+
     /// <summary>On Unix, copies left in the shared temporary directory are removed only once they are this old.</summary>
     internal static readonly TimeSpan UnixCopyMaxAge = TimeSpan.FromHours(1);
 
@@ -54,7 +60,7 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
         UpdateInstallRecord record;
         try
         {
-            record = UpdateInstallRecord.Load(Path.Combine(root, UpdateInstallRecord.FileName));
+            record = UpdateInstallRecord.Load(InstallLayout.RecordPath(root));
         }
         catch (UpdateException ex)
         {
@@ -88,6 +94,15 @@ internal sealed class ApplyCommand(UpdaterEnvironment environment, TextWriter lo
     private UpdaterResult HandOff(string root, UpdateInstallRecord record, UpdaterState state, ApplyOptions options)
     {
         var installed = record.Version.ToString();
+        if (record.Strategy == BundleStrategy)
+        {
+            // Nothing is touched: swapping a signed bundle needs the code-signing checks of the bundle strategy.
+            return UpdaterResult.Fail(
+                UpdaterExitCodes.ManualUpdateNeeded,
+                $"this updater cannot apply macOS bundle updates yet; install {record.App} from the new zip manually",
+                installed);
+        }
+
         if (record.Strategy is not (ReplaceStrategy or ReinstallStrategy))
         {
             return UpdaterResult.Fail(UpdaterExitCodes.ManualUpdateNeeded, $"this updater cannot apply updates with the '{record.Strategy}' strategy; update manually", installed);

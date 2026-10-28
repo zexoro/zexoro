@@ -45,7 +45,7 @@ internal sealed class TestInstall : IDisposable
     /// <summary>The artifact's file extension.</summary>
     public string Extension => Format switch
     {
-        "zip" => ".zip",
+        "zip" or "app" => ".zip",
         "tar-gz" => ".tar.gz",
         "deb" => ".deb",
         _ => ".exe",

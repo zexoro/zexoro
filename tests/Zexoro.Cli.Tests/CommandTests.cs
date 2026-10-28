@@ -54,6 +54,69 @@ public sealed class CommandTests : IDisposable
     private int Run(params string[] args) =>
         App.Run(args, _stdout, _stderr, new CliEnvironment(_dir.FullName, name => _variables.GetValueOrDefault(name)));
 
+    private int Run(bool macOSHost, Func<string, IReadOnlyList<string>, Zexoro.Formats.MacOS.ToolResult> tools, params string[] args) =>
+        App.Run(args, _stdout, _stderr, new CliEnvironment(_dir.FullName, name => _variables.GetValueOrDefault(name))
+        {
+            IsMacOSHost = macOSHost,
+            MacTools = new DelegateTools(tools),
+        });
+
+    private sealed class DelegateTools(Func<string, IReadOnlyList<string>, Zexoro.Formats.MacOS.ToolResult> run) : Zexoro.Formats.MacOS.IMacToolRunner
+    {
+        public Zexoro.Formats.MacOS.ToolResult Run(string fileName, IReadOnlyList<string> arguments) => run(fileName, arguments);
+    }
+
+    private const string MacOSDoctorTables = """
+
+        [macos]
+        icon = "assets/app.png"
+
+        [macos.signing]
+        identity = "zexoro test signer"
+        keychain = "/k/test.keychain-db"
+
+        """;
+
+    [Fact]
+    public void Doctor_MacOSTarget_OnAnotherHost_IsAnError()
+    {
+        WriteProject();
+        File.WriteAllText(ConfigPath, Config.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"osx-arm64\"", StringComparison.Ordinal) + MacOSDoctorTables);
+        WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh\n"u8.ToArray());
+        WriteFile("assets/app.png", Zexoro.Formats.Linux.PngIcon.FromBytes(TestIcon.Create()).Bytes);
+
+        Assert.Equal(ExitCodes.Failure, Run(false, (_, _) => throw new InvalidOperationException("no tools here"), "doctor"));
+
+        Assert.Contains("error    macOS bundles pack only on macOS", Stdout, StringComparison.Ordinal);
+        Assert.Contains("ok       macos.icon:", Stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Doctor_MacOSTarget_ReportsToolsAndTheSigningIdentity()
+    {
+        WriteProject();
+        File.WriteAllText(ConfigPath, Config.Replace("main = \"ExampleNotes.exe\"", "main = \"ExampleNotes.exe\"\ntarget = \"osx-arm64\"", StringComparison.Ordinal) + MacOSDoctorTables);
+        WriteFile("build/win-x64/ExampleNotes.exe", "#!/bin/sh\n"u8.ToArray());
+        WriteFile("assets/app.png", Zexoro.Formats.Linux.PngIcon.FromBytes(TestIcon.Create()).Bytes);
+        var calls = new List<string>();
+
+        Run(true, (file, arguments) =>
+        {
+            calls.Add(file + " " + string.Join(' ', arguments));
+            return arguments switch
+            {
+                ["--find", var tool] => new Zexoro.Formats.MacOS.ToolResult(0, $"/Library/Developer/CommandLineTools/usr/bin/{tool}\n", string.Empty),
+                ["find-identity", ..] => new Zexoro.Formats.MacOS.ToolResult(0, "  1) 1CB8651350F83737734D821809B0F1DC542B7432 \"zexoro test signer\" (CSSMERR_TP_NOT_TRUSTED)\n", string.Empty),
+                _ => new Zexoro.Formats.MacOS.ToolResult(0, string.Empty, string.Empty),
+            };
+        }, "doctor");
+
+        Assert.Contains("ok       codesign: /usr/bin/codesign", Stdout, StringComparison.Ordinal);
+        Assert.Contains("ok       notarytool: /Library/Developer/CommandLineTools/usr/bin/notarytool", Stdout, StringComparison.Ordinal);
+        Assert.Contains("ok       macos.signing: identity 'zexoro test signer' in /k/test.keychain-db", Stdout, StringComparison.Ordinal);
+        Assert.Contains("/usr/bin/security find-identity -p codesigning /k/test.keychain-db", calls);
+    }
+
     private void WriteFile(string relative, byte[] content)
     {
         var path = Path.Combine(_dir.FullName, relative);

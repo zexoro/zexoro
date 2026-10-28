@@ -26,7 +26,9 @@ internal sealed class ConfigReader
 
     /// <summary>apk's version operators, longest first.</summary>
     private static readonly string[] ApkOperators = ["><", "<=", ">=", "=~", "<", ">", "=", "~"];
-    private static readonly string[] MacOSKeys = ["formats"];
+    private static readonly string[] MacOSKeys = ["formats", "bundle_id", "icon", "minimum_version", "category", "signing", "notarization"];
+    private static readonly string[] MacOSSigningKeys = ["identity", "keychain", "entitlements", "installer_identity"];
+    private static readonly string[] MacOSNotarizationKeys = ["key", "key_id", "issuer"];
     private static readonly string[] WindowsKeys = ["formats", "install_scope", "shortcuts", "license", "sign", "signing", "uninstall"];
     private static readonly string[] SigningKeys = ["certificate", "password", "timestamp"];
     private static readonly string[] UninstallKeys = ["remove"];
@@ -556,8 +558,90 @@ internal sealed class ConfigReader
     private MacOSConfig ReadMacOS(TableReader table)
     {
         var formats = ReadFormats(table, OperatingSystemFamily.MacOS);
+        string? bundleId = null;
+        if (table.OptionalString("bundle_id") is { } bundleIdNode)
+        {
+            if (MacOSConfig.ValidateBundleId(bundleIdNode.Value) is { } problem)
+            {
+                Error(bundleIdNode, $"macos.bundle_id: '{bundleIdNode.Value}' {problem}");
+            }
+            else
+            {
+                bundleId = bundleIdNode.Value;
+            }
+        }
+
+        var icon = table.OptionalPath("icon");
+        string? minimumVersion = null;
+        if (table.OptionalString("minimum_version") is { } minimumNode)
+        {
+            var parts = minimumNode.Value.Split('.');
+            if (parts.Length > 3 || parts.Any(p => p.Length is 0 or > 4 || !p.All(char.IsAsciiDigit)))
+            {
+                Error(minimumNode, $"macos.minimum_version: '{minimumNode.Value}' is not a macOS version such as '11.0' or '13.5'");
+            }
+            else
+            {
+                minimumVersion = minimumNode.Value;
+            }
+        }
+
+        string? category = null;
+        if (table.OptionalString("category") is { } categoryNode)
+        {
+            const string prefix = "public.app-category.";
+            var value = categoryNode.Value;
+            if (!value.StartsWith(prefix, StringComparison.Ordinal) || value.Length == prefix.Length
+                || !value[prefix.Length..].All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '-'))
+            {
+                Error(categoryNode, $"macos.category: '{value}' is not an application category such as 'public.app-category.productivity'");
+            }
+            else
+            {
+                category = value;
+            }
+        }
+
+        MacOSSigningConfig? signing = null;
+        if (table.OptionalTable("signing", MacOSSigningKeys) is { } signingTable)
+        {
+            var identity = signingTable.RequiredValue("identity");
+            var keychain = signingTable.OptionalValue("keychain");
+            var entitlements = signingTable.OptionalPath("entitlements");
+            var installerIdentity = signingTable.OptionalValue("installer_identity");
+            signingTable.ReportUnknownKeys();
+            if (identity is not null)
+            {
+                if (identity.Literal == "-")
+                {
+                    Error(identity.Position, "macos.signing.identity: '-' means ad-hoc signing, which zexoro does without [macos.signing]; name a certificate or remove the table");
+                }
+                else
+                {
+                    signing = new MacOSSigningConfig(_baseDirectory, identity, keychain, entitlements, installerIdentity);
+                }
+            }
+        }
+
+        MacOSNotarizationConfig? notarization = null;
+        if (table.OptionalTable("notarization", MacOSNotarizationKeys) is { } notarizationTable)
+        {
+            var key = notarizationTable.RequiredValue("key");
+            var keyId = notarizationTable.RequiredValue("key_id");
+            var issuer = notarizationTable.RequiredValue("issuer");
+            notarizationTable.ReportUnknownKeys();
+            if (key is not null && keyId is not null && issuer is not null)
+            {
+                notarization = new MacOSNotarizationConfig(_baseDirectory, key, keyId, issuer);
+                if (signing is null && !table.Contains("signing"))
+                {
+                    Error(key.Position, "[macos.notarization] needs [macos.signing]: Apple notarizes only code signed with a Developer ID certificate");
+                }
+            }
+        }
+
         table.ReportUnknownKeys();
-        return new MacOSConfig(true, formats);
+        return new MacOSConfig(true, formats, bundleId, icon, minimumVersion, category, signing, notarization);
     }
 
     private WindowsConfig ReadWindows(TableReader table)

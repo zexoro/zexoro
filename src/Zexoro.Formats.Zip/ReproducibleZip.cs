@@ -85,7 +85,15 @@ public static class ReproducibleZip
     /// record, if any) to 0, MS-DOS: the attributes are MS-DOS attributes on every host.
     /// </summary>
     /// <exception cref="InvalidDataException">The archive's end records are not where they must be.</exception>
-    internal static void MarkMadeByMsDos(Stream stream)
+    internal static void MarkMadeByMsDos(Stream stream) => MarkMadeBy(stream, 0);
+
+    /// <summary>
+    /// Sets the "version made by" host of every central directory header (and of the Zip64 end
+    /// record, if any) to <paramref name="host"/>: 0 for MS-DOS attributes, 3 for Unix modes in the
+    /// external attributes' high 16 bits.
+    /// </summary>
+    /// <exception cref="InvalidDataException">The archive's end records are not where they must be.</exception>
+    internal static void MarkMadeBy(Stream stream, byte host)
     {
         var length = stream.Length;
         var tailLength = (int)Math.Min(length, 22 + ushort.MaxValue);
@@ -131,7 +139,7 @@ public static class ReproducibleZip
             size = (long)BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(40));
             offset = (long)BinaryPrimitives.ReadUInt64LittleEndian(record.AsSpan(48));
             stream.Position = zip64End + 13;
-            stream.WriteByte(0);
+            stream.WriteByte(host);
         }
 
         var directory = new byte[size];
@@ -145,7 +153,7 @@ public static class ReproducibleZip
                 throw new InvalidDataException("The archive's central directory is malformed.");
             }
 
-            directory[position + 5] = 0;
+            directory[position + 5] = host;
             position += 46
                 + BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(position + 28))
                 + BinaryPrimitives.ReadUInt16LittleEndian(directory.AsSpan(position + 30))

@@ -38,7 +38,8 @@ zexoro doctor    # checks the configuration, the files it names, the certificate
 zexoro pack      # builds dist/<name>-<version>-win-<arch>.exe (and .zip with formats = ["nsis", "zip"]),
                  # or dist/<name>-<version>-linux-<arch>.tar.gz for a Linux build output
                  # (and dist/<pkg>_<version>_<arch>.deb, dist/<pkg>-<version>-1.<arch>.rpm and
-                 #  dist/<pkg>-<version>-r0.<arch>.apk with formats = ["tar.gz", "deb", "rpm", "apk"])
+                 #  dist/<pkg>-<version>-r0.<arch>.apk with formats = ["tar.gz", "deb", "rpm", "apk"]),
+                 # or dist/<name>-<version>-osx-<arch>.zip (a signed .app) for a macOS build output, on macOS
 ```
 
 `zexoro pack --version 1.2.3` overrides `app.version` (useful in CI), `--output <dir>` writes somewhere other than `dist/` next to the configuration, and `--config <path>` reads another configuration file than `./zexoro.toml`. `--input <dir>` and `--main <path>` replace `input.dir` and `input.main` (relative to the current directory and to the input directory), so one configuration can serve a CI matrix of build outputs, and `--format <f>[,<f>...]` replaces the formats of the target platform's table. With [`[updates]`](#updates-optional), `--channel <channel>` overrides `updates.channel` and `--notes <url>` sets the release notes URL of the release fragment.
@@ -51,7 +52,7 @@ zexoro packages build output; it never builds your application. One `pack` run p
 | ELF, 64-bit little-endian, for x86-64 or AArch64 | `linux-x64`, `linux-arm64` |
 | Mach-O for x86_64 or arm64; a universal binary with both slices | `osx-x64`, `osx-arm64`; `osx-universal` |
 
-An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip` and Linux `tar.gz`, `deb`, `rpm` and `apk` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
+An entry point that is not a native executable (a script) needs [`[input] target`](#input-required). The target platform's table (`[windows]`, `[linux]` or `[macos]`) decides which formats are built; the tables of the other platforms are still checked, but ignored, so one file can describe every platform. Windows `nsis` and `zip`, Linux `tar.gz`, `deb`, `rpm` and `apk`, and macOS `zip` are implemented so far: the other formats are recognized, and `pack` refuses them with "not implemented yet" before building anything.
 
 ## Configuration
 
@@ -107,7 +108,7 @@ Omit the table to build unsigned installers (`pack` prints a notice). Every valu
 
 ### `[linux]` and `[macos]` (optional)
 
-Used when the target is Linux or macOS. Linux `tar.gz`, `deb`, `rpm` and `apk` are implemented; `appimage` and every macOS format are not yet, but the tables accept their names already.
+Used when the target is Linux or macOS. Linux `tar.gz`, `deb`, `rpm` and `apk` and macOS `zip` are implemented; `appimage`, `dmg` and `pkg` are not yet, but the tables accept their names already.
 
 | Table | Key | Type | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -125,7 +126,18 @@ Used when the target is Linux or macOS. Linux `tar.gz`, `deb`, `rpm` and `apk` a
 | `[linux.apk]` | `license` | string | none | The apk's `license`, conventionally an SPDX expression. Without it the field is left out (with a notice). |
 | `[linux.apk.signing]` | `key` | string or `{ env = "NAME" }` | none | The RSA private key apk packages are signed with, PEM (what `abuild-keygen` or `openssl genrsa` writes, unencrypted, 2048 bits or more): the key itself (usually from an environment variable) or the path of a file holding it. Without the table packages are unsigned, with a notice. |
 | `[linux.apk.signing]` | `key_name` | string | required with `key` | The file name of the public key in `/etc/apk/keys`, for example `"dev@example.com-6123abcd.rsa.pub"`; apk finds the key by it. |
-| `[macos]` | `formats` | array of `"zip"`, `"dmg"`, `"pkg"` | `["zip"]` | |
+| `[macos]` | `formats` | array of `"zip"`, `"dmg"`, `"pkg"` | `["zip"]` | `zip` is a [signed `.app` bundle in a zip](#the-macos-zip). |
+| `[macos]` | `bundle_id` | string | `app.id` | The bundle's `CFBundleIdentifier`: ASCII letters, digits, `-` and `.`. |
+| `[macos]` | `icon` | path | converted from `app.icon` | An `.icns` file (used as it is) or a square PNG of 16, 32, 64, 128, 256, 512 or 1024 pixels. Without it, the largest image of `app.icon` becomes a one-image icns, so it must have one of those sizes. |
+| `[macos]` | `minimum_version` | string | none | `LSMinimumSystemVersion`, for example `"12.0"`. |
+| `[macos]` | `category` | string | none | `LSApplicationCategoryType`, for example `"public.app-category.productivity"`. |
+| `[macos.signing]` | `identity` | string or `{ env = "NAME" }` | required | The code-signing identity `codesign --sign` takes: the certificate's name, such as `"Developer ID Application: Example Ltd. (TEAMID1234)"`, or its SHA-1 hash. Without the table bundles are signed ad hoc, with a notice. |
+| `[macos.signing]` | `keychain` | string or `{ env = "NAME" }` | the keychain search list | The keychain file holding the identity, for example a temporary CI keychain. |
+| `[macos.signing]` | `entitlements` | path | none | An entitlements property list for the application (applied to the bundle, not to nested code). A framework-dependent .NET application under the hardened runtime needs `com.apple.security.cs.allow-jit` and `com.apple.security.cs.disable-library-validation`. |
+| `[macos.signing]` | `installer_identity` | string or `{ env = "NAME" }` | none | The installer-signing identity for `pkg` (not implemented yet). |
+| `[macos.notarization]` | `key` | string or `{ env = "NAME" }` | required | Path of the App Store Connect API key (`AuthKey_<id>.p8`). Needs `[macos.signing]`. |
+| `[macos.notarization]` | `key_id` | string or `{ env = "NAME" }` | required | The API key's ID. |
+| `[macos.notarization]` | `issuer` | string or `{ env = "NAME" }` | required | The issuer ID of your App Store Connect team. |
 
 ### `[updates]` (optional)
 
@@ -256,9 +268,25 @@ Set `key_name = "dev@example.com-6123abcd.rsa.pub"`; users copy the public key t
 
 Updates work as for the deb (strategy `notify`): `check` reports the new package's `url`, `download` and `apply` exit 7, and the user upgrades with `sudo apk add ./<new>.apk`.
 
+## The macOS zip
+
+With `formats = ["zip"]` in `[macos]` (the default), `pack` writes `<name>-<version>-osx-<arch>.zip` (`x64`, `arm64` or `universal`) holding a signed `<app.name>.app`. macOS formats pack **only on macOS**: signing uses the system's `codesign`, and notarization `xcrun notarytool` and `stapler` from the Xcode command line tools; other hosts fail with a clear message. Users unzip it (Finder or `ditto -x -k`) and move the app to Applications.
+
+**The bundle.** A flat build output is wrapped into a bundle. `input.main` must be a Mach-O executable in the top directory of `input.dir`. codesign accepts only code in `Contents/MacOS`, but applications expect their files next to the executable, so `Contents/MacOS/` mirrors your build output: Mach-O files (executables, `.dylib`s) are stored there, every other file in `Contents/Resources/app/` at the same relative path, and each tree has relative symbolic links to the other's files, so every file is found from either directory. Symbolic links in the output are kept when they are relative and stay inside it. Nested bundles (`.app`, `.framework`, …) in a flat output are refused; build the `.app` yourself in that case and set `input.dir` to it: an existing bundle is copied as it is, after checking that its `Info.plist` (XML or binary) has `CFBundleIdentifier` = `[macos] bundle_id` (or `app.id`), `CFBundleShortVersionString` = the version's `major.minor.patch`, and that `input.main` is `Contents/MacOS/<CFBundleExecutable>`.
+
+A generated `Info.plist` has `CFBundleIdentifier`, `CFBundleName` and `CFBundleDisplayName` (`app.name`), `CFBundleExecutable`, `CFBundlePackageType` `APPL`, `CFBundleShortVersionString` and `CFBundleVersion` (both `major.minor.patch`: Apple allows only numbers there, so `1.2.3-beta.1` becomes `1.2.3`; the full version is in the install record), `CFBundleIconFile` (`Contents/Resources/AppIcon.icns`), `LSMinimumSystemVersion`, `LSApplicationCategoryType`, `NSHighResolutionCapable` and `NSHumanReadableCopyright` (`app.publisher`). Every bundle gets the install record `Contents/Resources/zexoro-install.json` (format `app`, scope `user`, strategy `bundle`), and with `[updates]` `Contents/MacOS/zexoro-updater`: the osx-x64 or osx-arm64 build for a thin application, and for a universal one a universal binary that zexoro writes from both.
+
+**Signing.** With [`[macos.signing]`](#linux-and-macos-optional), every nested code item (Mach-O files and nested bundles, deepest first, including the updater) and then the bundle are signed with `codesign --sign <identity> --options runtime --timestamp` (hardened runtime and a secure timestamp, which notarization requires; failures of Apple's timestamp service are retried), the entitlements on the bundle; `codesign --verify --deep --strict` must accept the result. Without the table the bundle is signed ad hoc (`--sign -`, without hardened runtime), which runs on the Mac that packed it but is blocked by Gatekeeper elsewhere. **`[updates]` requires `[macos.signing]`**: an update must satisfy the installed bundle's designated requirement, and an ad-hoc signature's requirement is its own hash. Any stable certificate works for that (the tests use a self-signed one); distribution needs a Developer ID Application certificate from a paid Apple Developer account.
+
+**Notarization.** With [`[macos.notarization]`](#linux-and-macos-optional), the signed bundle is submitted with `xcrun notarytool submit --wait` (the API key, key ID and issuer), Apple's log is printed when it is not accepted, the ticket is stapled to the bundle with `xcrun stapler staple`, and the bundle is zipped again (a zip itself cannot be stapled). Without the table a notice says the bundle is not notarized.
+
+The zip keeps Unix modes and symbolic links in the layout `ditto -c -k --keepParent` writes (no extended attributes), with sorted entries and fixed timestamps; `ditto -x -k` and Finder restore it with a valid signature. `zexoro doctor` reports `codesign`, `notarytool` and `stapler`, whether the signing identity is in the keychain, the icon conversion, and the notarization key file.
+
+With `[updates]`, the zip is also the update payload (artifact format `app`, scope `user`) for every macOS container. In this version the bundled updater finds its record inside the bundle and `check` and `download` work, but `apply` exits 7 without touching the app: replacing a signed bundle comes with the next step.
+
 ## Automatic updates
 
-Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz, deb, rpm or apk, and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
+Installers and portable archives packed with [`[updates]`](#updates-optional) include `zexoro-updater.exe` (signed with your certificate when `[windows.signing]` is configured), or `zexoro-updater` in a tar.gz, deb, rpm, apk or macOS bundle (`Contents/MacOS/zexoro-updater`), and come with release fragments. Publishing a release takes a key pair and a signed feed ([design 0005](docs/design/0005-nsis-updates.md)):
 
 ```bash
 zexoro keys new                     # once: zexoro-update.key.pem (private) and zexoro-update.pub
@@ -279,7 +307,7 @@ zexoro-updater download [--json]                       # downloads and verifies 
 zexoro-updater apply --wait-pid <pid> [--restart] [--json]
 ```
 
-`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. Installs owned by a package manager (deb, rpm, apk) are only checked: `download` and `apply` exit 7 without touching anything, and the user installs the new package (its `url` is in `check --json`). One feed can carry the installer, the zip, the tar.gz archives and the deb, rpm and apk packages of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`).
+`apply` waits up to 60 seconds for the process `<pid>` (your application, which exits after starting it), installs the update and restarts the application with `--restart`. Per-user installs are updated in place by swapping the new files in (the new installer stages them; a zip or tar.gz install extracts the new archive next to itself, refusing absolute paths and `..`; a tar.gz keeps modes and symbolic links that stay inside `app/`, a zip may hold no links); per-machine installs run the new installer, which asks for elevation. Installs owned by a package manager (deb, rpm, apk) are only checked: `download` and `apply` exit 7 without touching anything, and the user installs the new package (its `url` is in `check --json`). One feed can carry the installer, the zip, the tar.gz archives and the deb, rpm and apk packages of a release: each install takes the artifact of its own operating system, architecture and format. The updater rejects a feed whose signature does not verify, an older feed than one already seen, and downloads whose size or SHA-256 differ from the feed (exit code 4). Other exit codes: `3` network, `5` apply failed and rolled back, `6` cancelled (elevation declined or the application did not exit), `7` manual update needed (including a zip or tar.gz in a folder the user cannot write to), `8` apply and rollback failed. The result of the last `apply` is in `%LOCALAPPDATA%\zexoro\updater\<app.id>\last-apply.json` (on Linux `$XDG_STATE_HOME/zexoro/updater/<app.id>/`, by default `~/.local/state/...`; on macOS `~/Library/Application Support/zexoro/updater/<app.id>/`).
 
 ## zexoro exit codes
 

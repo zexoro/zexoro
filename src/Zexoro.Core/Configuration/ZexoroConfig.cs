@@ -597,10 +597,148 @@ public sealed class ApkSigningConfig
 /// <summary><c>[macos]</c>: macOS package settings.</summary>
 public sealed class MacOSConfig : PlatformConfig
 {
-    internal MacOSConfig(bool isConfigured, IReadOnlyList<PackageFormat> formats)
+    internal MacOSConfig(
+        bool isConfigured,
+        IReadOnlyList<PackageFormat> formats,
+        string? bundleId = null,
+        ConfigPath? icon = null,
+        string? minimumVersion = null,
+        string? category = null,
+        MacOSSigningConfig? signing = null,
+        MacOSNotarizationConfig? notarization = null)
         : base(OperatingSystemFamily.MacOS, isConfigured, formats)
     {
+        BundleId = bundleId;
+        Icon = icon;
+        MinimumVersion = minimumVersion;
+        Category = category;
+        Signing = signing;
+        Notarization = notarization;
     }
+
+    /// <summary><c>bundle_id</c>: the bundle's <c>CFBundleIdentifier</c>, already validated, or null for <c>app.id</c>.</summary>
+    public string? BundleId { get; }
+
+    /// <summary><c>icon</c>: an <c>.icns</c> or PNG file, or null to convert <c>[app] icon</c>.</summary>
+    public ConfigPath? Icon { get; }
+
+    /// <summary><c>minimum_version</c>: <c>LSMinimumSystemVersion</c> (such as <c>11.0</c>), or null to leave it out.</summary>
+    public string? MinimumVersion { get; }
+
+    /// <summary><c>category</c>: <c>LSApplicationCategoryType</c> (such as <c>public.app-category.productivity</c>), or null.</summary>
+    public string? Category { get; }
+
+    /// <summary><c>[macos.signing]</c>, or null to sign ad hoc.</summary>
+    public MacOSSigningConfig? Signing { get; }
+
+    /// <summary><c>[macos.notarization]</c>, or null to skip notarization.</summary>
+    public MacOSNotarizationConfig? Notarization { get; }
+
+    /// <summary>The bundle identifier: <see cref="BundleId"/>, or <paramref name="app"/>'s id.</summary>
+    public string BundleIdentifier(AppConfig app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        return BundleId ?? app.Id;
+    }
+
+    /// <summary>
+    /// Returns why <paramref name="value"/> cannot be a <c>CFBundleIdentifier</c>, or null when it
+    /// can: ASCII letters, digits, '-' and '.', in at least two non-empty dot-separated segments.
+    /// </summary>
+    public static string? ValidateBundleId(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var segments = value.Split('.');
+        if (value.Length is 0 or > 255 || segments.Length < 2 || segments.Any(s => s.Length == 0))
+        {
+            return "is not a reverse-DNS bundle identifier such as 'com.example.notes'";
+        }
+
+        return value.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.')
+            ? null
+            : "may contain only ASCII letters, digits, '-' and '.'";
+    }
+}
+
+/// <summary><c>[macos.signing]</c>: the code-signing identity <c>codesign</c> uses.</summary>
+public sealed class MacOSSigningConfig
+{
+    private readonly string _baseDirectory;
+
+    internal MacOSSigningConfig(string baseDirectory, ConfigValue identity, ConfigValue? keychain, ConfigPath? entitlements, ConfigValue? installerIdentity)
+    {
+        _baseDirectory = baseDirectory;
+        Identity = identity;
+        Keychain = keychain;
+        Entitlements = entitlements;
+        InstallerIdentity = installerIdentity;
+    }
+
+    /// <summary>
+    /// <c>identity</c>: what <c>codesign --sign</c> takes, the certificate's common name (such as
+    /// <c>Developer ID Application: Example Ltd. (TEAMID1234)</c>) or its SHA-1 hash.
+    /// </summary>
+    public ConfigValue Identity { get; }
+
+    /// <summary><c>keychain</c>: the keychain file holding the identity, or null for the user's keychain search list.</summary>
+    public ConfigValue? Keychain { get; }
+
+    /// <summary><c>entitlements</c>: an entitlements property list for the application, or null for none.</summary>
+    public ConfigPath? Entitlements { get; }
+
+    /// <summary><c>installer_identity</c>: the installer-signing identity of pkg packages, or null.</summary>
+    public ConfigValue? InstallerIdentity { get; }
+
+    /// <summary>
+    /// Resolves <see cref="Keychain"/>: an absolute path as it is, a relative path that exists
+    /// below the configuration directory as that file, anything else as written (a keychain name
+    /// that the Security framework looks up in <c>~/Library/Keychains</c>); null when none is configured.
+    /// </summary>
+    /// <exception cref="ConfigurationException">A referenced environment variable is not set.</exception>
+    public string? ResolveKeychain(Func<string, string?>? environment = null)
+    {
+        if (Keychain is null)
+        {
+            return null;
+        }
+
+        var value = Keychain.Resolve(environment);
+        if (Path.IsPathRooted(value))
+        {
+            return value;
+        }
+
+        var path = ConfigReader.ResolvePath(_baseDirectory, value);
+        return File.Exists(path) ? path : value;
+    }
+}
+
+/// <summary><c>[macos.notarization]</c>: the App Store Connect API key <c>notarytool</c> uses.</summary>
+public sealed class MacOSNotarizationConfig
+{
+    private readonly string _baseDirectory;
+
+    internal MacOSNotarizationConfig(string baseDirectory, ConfigValue key, ConfigValue keyId, ConfigValue issuer)
+    {
+        _baseDirectory = baseDirectory;
+        Key = key;
+        KeyId = keyId;
+        Issuer = issuer;
+    }
+
+    /// <summary><c>key</c>: the path of the API key file (<c>AuthKey_&lt;id&gt;.p8</c>), relative to the configuration directory.</summary>
+    public ConfigValue Key { get; }
+
+    /// <summary><c>key_id</c>: the API key's ID.</summary>
+    public ConfigValue KeyId { get; }
+
+    /// <summary><c>issuer</c>: the issuer ID of the App Store Connect team.</summary>
+    public ConfigValue Issuer { get; }
+
+    /// <summary>Resolves <see cref="Key"/> to an absolute path.</summary>
+    /// <exception cref="ConfigurationException">A referenced environment variable is not set.</exception>
+    public string ResolveKeyPath(Func<string, string?>? environment = null) =>
+        ConfigReader.ResolvePath(_baseDirectory, Key.Resolve(environment));
 }
 
 /// <summary><c>[windows.signing]</c>: the Authenticode certificate.</summary>
