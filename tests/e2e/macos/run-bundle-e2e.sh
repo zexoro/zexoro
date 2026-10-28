@@ -67,9 +67,14 @@ for rid in osx-x64 osx-arm64; do
   mkdir -p "$work/publish-$rid/data"
   printf 'data\n' > "$work/publish-$rid/data/readme.txt"
 done
+# A RID-specific publish marks the assembly for that architecture; a universal app needs an AnyCPU one.
+dotnet publish "$here/../fixture-app" -c Release -r osx-arm64 --self-contained false -p:PlatformTarget=AnyCPU -o "$work/publish-universal" -nologo -v quiet
+rm -f "$work/publish-universal"/*.pdb
+cp "$work/publish-osx-arm64/version.txt" "$work/publish-universal/"
+cp -R "$work/publish-osx-arm64/data" "$work/publish-universal/"
 mkdir -p "$work/input"
 cp -R "$work/publish-osx-$host_arch" "$work/input/$host_arch"
-cp -R "$work/publish-osx-arm64" "$work/input/universal"
+cp -R "$work/publish-universal" "$work/input/universal"
 lipo -create "$work/publish-osx-x64/FixtureApp" "$work/publish-osx-arm64/FixtureApp" -output "$work/input/universal/FixtureApp"
 lipo -archs "$work/input/universal/FixtureApp"
 
